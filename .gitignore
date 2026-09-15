@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.env
+.env.*
+.state/
+.cache/
+out/
+output/
+*.log
+.merge-candidates/
+.install-baseline.json

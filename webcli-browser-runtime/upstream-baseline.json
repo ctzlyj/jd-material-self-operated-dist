@@ -1,0 +1,9 @@
+{
+  "package": "@jd/webcli",
+  "observedVersion": "1.1.3",
+  "method": "BasePage.prototype.evaluateWithArgs",
+  "sourceFile": "references/upstream-evaluate-with-args.txt",
+  "evaluateWithArgsSha256": "e1491eabc5b40fe957dc64af7cbb1144e2be13b183a41d4ded920ae5ff14cd59",
+  "commandTransportSourceFile": "references/upstream-send-command-raw.txt",
+  "commandTransportSha256": "7f5164d42a631cb2dcbf2b2ae9e72af984a4ac15bccc6734115d130efe362854"
+}

@@ -1,0 +1,11 @@
+async evaluateWithArgs(js, args) {
+        const declarations = Object.entries(args)
+            .map(([key, value]) => {
+            if (!/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(key)) {
+                throw new Error(`evaluateWithArgs: invalid key "${key}"`);
+            }
+            return `const ${key} = ${JSON.stringify(value)};`;
+        })
+            .join('\n');
+        return this.evaluate(`${declarations}\n${js}`);
+    }

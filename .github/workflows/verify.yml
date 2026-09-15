@@ -1,0 +1,17 @@
+name: Verify protected distribution
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -r jd-material-self-operated/requirements.txt
+      - run: python -B tools/verify_public_distribution.py

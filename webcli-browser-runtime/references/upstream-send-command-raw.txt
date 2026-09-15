@@ -1,0 +1,49 @@
+async function sendCommandRaw(action, params) {
+    const maxRetries = 4;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        const id = generateId();
+        const rawWindowMode = process.env.WEBCLI_WINDOW;
+        const envWindowMode = rawWindowMode === 'foreground' || rawWindowMode === 'background' || rawWindowMode === 'current'
+            ? rawWindowMode
+            : undefined;
+        const contextId = params.contextId ?? resolveProfileContextId();
+        const windowMode = params.windowMode ?? envWindowMode;
+        const command = { id, action, ...params, ...(contextId && { contextId }), ...(windowMode && { windowMode }) };
+        try {
+            const res = await requestDaemon('/command', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(command),
+                timeout: 30000,
+            });
+            const result = (await res.json());
+            if (!result.ok) {
+                if (result.errorCode === 'command_result_unknown') {
+                    throw new BrowserCommandError(result.error ?? 'Browser command result is unknown', result.errorCode, result.errorHint);
+                }
+                const isDuplicateCommandId = res.status === 409
+                    || (result.error ?? '').includes('Duplicate command id');
+                if (isDuplicateCommandId && attempt < maxRetries) {
+                    continue;
+                }
+                const advice = classifyBrowserError(new Error(result.error ?? ''));
+                if (advice.retryable && attempt < maxRetries) {
+                    await sleep(advice.delayMs);
+                    continue;
+                }
+                throw new BrowserCommandError(result.error ?? 'Daemon command failed', result.errorCode, result.errorHint);
+            }
+            return result;
+        }
+        catch (err) {
+            const isNetworkError = err instanceof TypeError
+                || (err instanceof Error && err.name === 'AbortError');
+            if (isNetworkError && attempt < maxRetries) {
+                await sleep(500);
+                continue;
+            }
+            throw err;
+        }
+    }
+    throw new Error('sendCommand: max retries exhausted');
+}

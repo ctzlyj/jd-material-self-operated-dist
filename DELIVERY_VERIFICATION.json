@@ -1,0 +1,22 @@
+{
+  "status": "verified-real-erp-and-core-with-synthetic-business",
+  "clientVersion": "2026.09.15.2",
+  "coreVersion": "2026.09.14.29",
+  "sourceCommit": "b333d124fb39f8bb3c5f01ca1049cf3da06e860c",
+  "sourceTests": 266,
+  "cleanInstallTests": 266,
+  "firstUseTests": 22,
+  "rootTests": 79,
+  "browserTests": 715,
+  "transportTests": 15,
+  "liveEvidenceSha256": "a336ddc70620fed3a6a575c9ff212fe31790082328c4468fe3a62ece1a8da6b6",
+  "realIdentityAndOwnerRead": "passed",
+  "realProtectedCoreSyntheticSpus": 12,
+  "syntheticSkus": 24,
+  "resumeNoDuplicates": true,
+  "realModelCalls": 0,
+  "realProductWrites": 0,
+  "testPermissionRestored": true,
+  "colleagueProductionMaintenance": "not-performed",
+  "scoreRefresh": "not-queried"
+}
