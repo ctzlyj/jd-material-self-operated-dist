@@ -113,15 +113,21 @@ def execute_title_segment(result, plan, folder, args, client, model, original_va
     return {'spuIds': [job.spu_id for job in result.prepared.jobs], 'skuIds': payload['skuIds'], 'shortTitles': result_titles, 'generationFailures': failures, 'imageRequests': 0, 'materialCompletionEstablished': False, 'elapsedSeconds': round(time.monotonic() - started, 3), 'titleAuditSha256': manual.sha(audit) if audit.exists() else None}
 
 def run_titles(args, client=None):
+    import upload_quarantine
     output = Path(args.output_dir).resolve()
     plan, snapshot = direct.load_direct(output, args.erp, args.confirm_token)
+    if upload_quarantine.load(output):
+        raise ValueError('use run-direct for a task with an unknown-upload quarantine')
     if args.confirm != 'GENERATE_UPLOAD_BIND_AND_VERIFY':
         raise ValueError('explicit direct authorization required')
     if not 1 <= args.batch_size <= 50 or (args.limit is not None and args.limit < 1):
         raise ValueError('invalid batch size or limit')
     args.owner_erp = plan['ownerErp']
     with core._erp_execution_lock(output):
-        main = manual.read_json(output / '.state/direct-progress.json')
+        main_path = output / '.state/direct-progress.json'
+        if not main_path.exists() and (any((output / '.state/run-events').glob('*.json')) or any(output.glob('segments/*/direct-result.json'))):
+            raise ValueError('missing material progress for an existing full run; reconcile before title-only work')
+        main = manual.read_json(main_path) if main_path.exists() else {'segments': {}, 'completedSpuIds': [], 'deferredSpuIds': [], 'heldSpus': direct.source_blocks(plan)}
         direct.validate_progress(output, main, {job.spu_id for job in snapshot.jobs})
         if main.get('activeSpuIds'):
             raise ValueError('finish or reconcile active direct segment before title-only work')

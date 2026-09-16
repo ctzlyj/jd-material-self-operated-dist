@@ -132,6 +132,10 @@ def freeze_requests(folder, payload):
     return frozen['sha256']
 
 def validate_progress(output, progress, allowed):
+    import upload_quarantine
+    quarantined = upload_quarantine.load(output)
+    if set(quarantined).intersection(progress['completedSpuIds']):
+        raise ValueError('quarantined SPU cannot be marked complete')
     completed, deferred = (set(), set())
     for key, segment in progress['segments'].items():
         folder = Path(segment['directory']).resolve()
@@ -141,6 +145,9 @@ def validate_progress(output, progress, allowed):
         if not receipt.is_relative_to(folder):
             raise ValueError('direct progress report path changed')
         report = manual.checked_json(receipt, segment['reportSha256'])
+        if report.get('scopeRevision'):
+            import scope_revision
+            scope_revision.load(folder, expected=report['scopeRevision'])
         known = set(report['jobs'])
         successes = {spu for spu, item in report['jobs'].items() if item['complete']}
         if not known <= allowed or successes != set(segment['completed']) or known - successes != set(segment['deferred']):
@@ -168,10 +175,10 @@ def refresh_progress(progress):
 def audit_request(request, materials, item):
     status, reason = binding._evaluate_binding_request(request, materials)
     receipt = item.get('material_submission_receipts', {}).get(str(request['materialType']), {})
-    return {'spuId': request['spuId'], 'materialType': request['materialType'], 'fingerprint': request['fingerprint'], 'persisted': status in ('approved', 'pending'), 'auditStatus': status, 'reason': reason, 'accepted': receipt.get('fingerprint') == request['fingerprint']}
+    return {'spuId': request['spuId'], 'materialType': request['materialType'], 'fingerprint': request['fingerprint'], 'persisted': status in ('approved', 'pending'), 'auditStatus': status, 'reason': reason, 'auditApproved': status == 'approved', 'auditPending': status == 'pending', 'auditRejected': bool(binding.rejected_material_matches(request, materials)), 'accepted': receipt.get('fingerprint') == request['fingerprint']}
 
 def failure_fraction(jobs):
-    return sum((not item['complete'] and (not item.get('awaitingReadback', False)) for item in jobs.values())) / max(1, len(jobs))
+    return sum((not item['complete'] and (not item.get('awaitingReadback', False)) and (not item.get('awaitingFinalReadback', False)) for item in jobs.values())) / max(1, len(jobs))
 
 def title_spu_ids(jobs, desired):
     allowed = {sku for job in jobs for sku in job.short_title_sku_ids}
@@ -202,6 +209,16 @@ def submit_direct_titles(client, jobs, desired, folder, original_values):
 
 def source_blocks(plan):
     blocked = {}
+    if plan.get('formatVersion') == 2:
+        origin = plan['origin']
+        source = manual.checked_json(origin['path'], origin['sha256'])
+        allowed = set(plan.get('regenerateRejectedSpuIds', []))
+        reasons = {}
+        for row in source['result']['report_rows']:
+            if row['spuId'] not in allowed and row.get('rejectedMaterials'):
+                reasons.setdefault(row['spuId'], []).extend((material.get('reason') or 'native audit rejected' for material in row['rejectedMaterials']))
+        for spu, messages in reasons.items():
+            blocked[spu] = {'path': origin['path'], 'sha256': origin['sha256'], 'reason': '; '.join(dict.fromkeys(messages)), 'category': 'skipped-native-rejection'}
     cache = {}
     for record in plan['cachedRecords']:
         if all((record.get('urls', {}).get(kind) for kind in record['requiredKinds'])):
@@ -245,12 +262,19 @@ class SharedModel:
 
     def get(self):
         if self.client is None:
-            self.client = core.ModelClient(os.environ.get(core.PROVIDER.api_key_env, ''), timeout=self.args.timeout, image_concurrency=self.args.image_concurrency)
+            if getattr(self.args, 'dual_key_images', False):
+                if not getattr(self.args, 'no_generation_retries', False) or getattr(self.args, 'resource_cooldown', False):
+                    raise ValueError('dual-key mode requires no-generation-retries, without same-request resource probes')
+                from dual_key_generation import DualKeyModelClient
+                self.client = DualKeyModelClient(os.environ.get(core.PROVIDER.api_key_env, ''), os.environ.get('JD_LLM_API_KEY_2', ''), self.output, timeout=self.args.timeout, image_concurrency=self.args.image_concurrency, paused=lambda: pause_requested(self.output))
+            else:
+                self.client = core.ModelClient(os.environ.get(core.PROVIDER.api_key_env, ''), timeout=self.args.timeout, image_concurrency=self.args.image_concurrency)
+            self.client.no_generation_retries = bool(getattr(self.args, 'no_generation_retries', False))
             self.client.skip_failed_images = bool(getattr(self.args, 'defer_incomplete', False))
             self.client.cancel_event = self.cancel_event
             if getattr(self.args, 'resource_cooldown', False):
                 from image_resource_recovery import ImageResourceRecovery
-                self.client.image_resource_recovery = ImageResourceRecovery(self.client, self.output, paused=lambda: pause_requested(self.output))
+                self.client.image_resource_recovery = ImageResourceRecovery(self.client, self.output, paused=lambda: pause_requested(self.output), window_seconds=getattr(self.args, 'resource_cooldown_window', 300))
             self.client.http.event_hooks['request'].append(lambda request: self.event('requests', request.url.path))
             self.client.http.event_hooks['response'].append(lambda response: self.event('responses', str(response.status_code)))
         return self.client
@@ -267,18 +291,20 @@ def subset_result(original, jobs):
     return replace(original, prepared=replace(original.prepared, jobs=tuple(jobs), rows=rows, original_rows=len(rows)), reference_urls={spu: url for spu, url in original.reference_urls.items() if spu in selected})
 
 def prepare_direct_generation(result, records, folder, args, client, cache_roots):
+    import scope_revision
     with direct_pipeline.phase(folder, 'initialScope') as scope:
         client.select_shop()
         if client.expected_erp != args.erp or client.owner_erp != args.owner_erp:
             raise ValueError('authenticated ERP changed')
-        client.verify_product_scope(result.prepared.jobs)
+        result, revision = scope_revision.prepare(folder, result, args, client, records)
     with direct_pipeline.phase(folder, 'cacheMigration') as cache:
         batch = folder / '批次001'
         migration = manual.seed_cache(result.prepared, records, batch, cache_roots)
         migrate_writes(result.prepared.jobs, records, batch)
-    return {'migration': migration, 'stageSeconds': {'initialScope': scope['elapsedSeconds'], 'cacheMigration': cache['elapsedSeconds']}}
+    return {'migration': migration, 'result': result, 'scopeRevision': revision, 'stageSeconds': {'initialScope': scope['elapsedSeconds'], 'cacheMigration': cache['elapsedSeconds']}}
 
 def generate_direct_materials(result, args, folder, model, prepared):
+    result = prepared.get('result', result)
     with direct_pipeline.phase(folder, 'generation') as event:
         if not getattr(args, 'cached_only', False):
             if getattr(args, 'resource_cooldown', False):
@@ -306,6 +332,7 @@ def execute_direct_segment(result, records, folder, args, client, cache_roots, m
         prepared = generate_direct_materials(result, args, folder, model, prepared)
     else:
         prepared = generation.result()
+    result = prepared.get('result', result)
     migration = prepared['migration']
     stage_seconds.update(prepared['stageSeconds'])
     checkpoint = time.monotonic()
@@ -313,23 +340,28 @@ def execute_direct_segment(result, records, folder, args, client, cache_roots, m
         after_generation()
         finish_stage('lookaheadPreparation')
     state = manual.read_json(batch / '.state/task.json')
-    ready = {job.spu_id for job in result.prepared.jobs if core._material_is_complete(job, state['jobs'].get(job.spu_id, {}), batch / '全部图片')}
+    import upload_quarantine
+    quarantined = upload_quarantine.for_batch(batch)
+    ready = {job.spu_id for job in result.prepared.jobs if job.spu_id not in quarantined and core._material_is_complete(job, state['jobs'].get(job.spu_id, {}), batch / '全部图片')}
     image_ready = {job.spu_id for job in result.prepared.jobs if job.spu_id in ready and core._model_kinds(job)}
     upload = core.upload_self_operated_materials(client, result.prepared, batch, args.category_id, selected_spu_ids=image_ready) if image_ready else None
     direct_failures.check_unknown_writes(batch, uploads_only=True)
     finish_stage('imageUpload')
     state = manual.read_json(batch / '.state/task.json')
     eligible = set()
+    preparation_failures = []
+    upload_failed = set(upload.failed_spu_ids) if upload else set()
     for job in result.prepared.jobs:
-        if job.spu_id not in ready:
+        if job.spu_id not in ready or job.spu_id in upload_failed:
             continue
         try:
             binding.build_self_operated_binding_requests(job, state['jobs'][job.spu_id])
             eligible.add(job.spu_id)
-        except ValueError:
-            pass
+        except ValueError as error:
+            preparation_failures.append({'spuId': job.spu_id, 'reason': str(error)})
     prepared_plan = binding.prepare_self_operated_binding_plan(client, result.prepared, batch, selected_spu_ids=eligible)
-    desired_titles = {sku: title for job in result.prepared.jobs for sku, title in state['jobs'].get(job.spu_id, {}).get('short_titles', {}).items() if sku in job.short_title_sku_ids}
+    failed_before_titles = upload_failed | {item['spuId'] for item in prepared_plan.preflight_failures}
+    desired_titles = {sku: title for job in result.prepared.jobs for sku, title in state['jobs'].get(job.spu_id, {}).get('short_titles', {}).items() if job.spu_id in ready and job.spu_id not in failed_before_titles and (sku in job.short_title_sku_ids)}
     canonical = {'materials': [{key: request[key] for key in ('spuId', 'materialType', 'skuIds', 'body', 'fingerprint')} for request in prepared_plan.authorization_requests], 'shortTitles': desired_titles}
     freeze_requests(batch, canonical)
     wire_payload = {'directPlanToken': args.confirm_token, 'erp': args.erp, 'requests': list(prepared_plan.requests), 'shortTitles': desired_titles, 'shortTitlesBefore': {sku: args._expected_titles[sku] for sku in desired_titles}, 'skuIds': [sku for job in result.prepared.jobs for sku in job.sku_ids]}
@@ -360,9 +392,17 @@ def execute_direct_segment(result, records, folder, args, client, cache_roots, m
         titles_ok = all((sku in desired_titles and after.get(sku) == desired_titles[sku] for sku in job.short_title_sku_ids))
         waiting_titles = all((sku in desired_titles and (after.get(sku) == desired_titles[sku] or sku in title_result['pending']) for sku in job.short_title_sku_ids))
         waiting_materials = material_ok or (job.spu_id in eligible and bool(material_checks) and (job.spu_id not in query_failures) and all((item['persisted'] or (item['accepted'] and item['auditStatus'] == 'mismatch') for item in material_checks)))
-        jobs[job.spu_id] = {'materialVerified': material_ok, 'titlesVerified': titles_ok, 'complete': material_ok and titles_ok, 'skuCount': len(job.sku_ids), 'awaitingReadback': not (material_ok and titles_ok) and waiting_materials and waiting_titles, 'generationError': state['jobs'].get(job.spu_id, {}).get('failure', '')}
+        jobs[job.spu_id] = {'materialVerified': material_ok, 'titlesVerified': titles_ok, 'complete': material_ok and titles_ok, 'skuCount': len(job.sku_ids), 'awaitingReadback': not (material_ok and titles_ok) and waiting_materials and waiting_titles, 'generationError': state['jobs'].get(job.spu_id, {}).get('failure', ''), 'failureReasons': direct_failures.job_failure_reasons(job, upload_failures=upload.failures if upload else [], preflight_failures=[*preparation_failures, *prepared_plan.preflight_failures], title_audit=title_audit)}
     finish_stage('verification')
-    report = {'jobs': jobs, 'materialChecks': checks, 'queryFailures': query_failures, 'materialReadback': actual, 'binding': asdict(bound), 'shortTitles': title_result, 'upload': asdict(upload) if upload else None, 'cacheMigration': migration, 'elapsedSeconds': round(checkpoint - started, 3), 'stageSeconds': stage_seconds, 'generationMode': 'cached-only' if cached_only else 'generate-missing', 'generationPrefetched': generation is not None, 'scoreRefreshed': False}
+    report = {'jobs': jobs, 'materialChecks': checks, 'queryFailures': query_failures, 'scopeRevision': prepared.get('scopeRevision'), 'materialReadback': actual, 'binding': asdict(bound), 'shortTitles': title_result, 'upload': asdict(upload) if upload else None, 'cacheMigration': migration, 'elapsedSeconds': round(checkpoint - started, 3), 'stageSeconds': stage_seconds, 'generationMode': 'cached-only' if cached_only else 'generate-missing', 'generationPrefetched': generation is not None, 'scoreRefreshed': False}
+    if getattr(bound, 'readback_deferred', False) is True or title_result.get('readbackDeferred') is True:
+        for item in jobs.values():
+            item.update(complete=False, awaitingFinalReadback=True)
+        report.update(readbackDeferred=True, deferredStateSha256=manual.sha(batch / '.state/task.json'), deferredDesiredSha256=manual.sha(batch / '.state/direct-desired.json'))
+        for check in checks:
+            check.update(persisted=False, auditStatus='not-queried', auditApproved=False, auditPending=False, auditRejected=False, reason='awaiting final readback')
+    for spu, item in quarantined.items():
+        jobs[spu].update(complete=False, materialVerified=False, titlesVerified=False, awaitingFinalReadback=False, awaitingReadback=False, quarantined=True, quarantine=item['evidence'], generationError=upload_quarantine.REASON)
     report = json.loads(json.dumps(report, ensure_ascii=False, default=str))
     return save_report(folder, report)
 
@@ -439,6 +479,8 @@ def run_direct(args, client=None):
             groups = groups[:1]
         model = SharedModel(args, output)
         client = client or binding.create_direct_client(args)
+        if getattr(args, 'defer_readback', False) or getattr(client, 'defer_readback', False) is True:
+            client.defer_readback = bool(getattr(args, 'defer_readback', False))
         pipeline = direct_pipeline.Lookahead(output, progress, args, client, list(records.values()), plan['cacheDirectories'], model) if getattr(args, 'pipeline', False) and (not cached_only) else None
         run_started = time.monotonic()
         run_path = output / '.state/run-events' / f'{time.time_ns()}.json'
@@ -485,12 +527,16 @@ def run_direct(args, client=None):
                     raise RuntimeError('model quota exhausted; cached progress preserved')
                 if model.client is not None and getattr(model.client, 'authentication_failed', False):
                     raise RuntimeError('model authentication failed; cached progress preserved')
+                if pipeline is not None and pipeline.scope_error is not None:
+                    raise pipeline.scope_error
                 if report.get('queryFailures') or (not getattr(args, 'defer_incomplete', False) and failure_fraction(report['jobs']) > 0.2):
                     progress['status'] = 'paused-failure-gate'
                     break
             else:
                 accounted = set(progress['completedSpuIds']) | set(progress['deferredSpuIds']) | set(progress['heldSpus'])
                 progress['status'] = 'scope-verified' if len(progress['completedSpuIds']) == len(snapshot.jobs) else 'finished-with-failures' if len(accounted) == len(snapshot.jobs) else 'checkpoint'
+                if getattr(args, 'defer_readback', False) and progress['status'] == 'finished-with-failures':
+                    progress['status'] = 'awaiting-final-readback'
         except _protected_core.ProtectedCoreError:
             raise
         except Exception as error:
@@ -512,4 +558,7 @@ def run_direct(args, client=None):
             except Exception as error:
                 progress['failureExportError'] = str(error)
                 core._save_state(path, progress)
+            close_images = getattr(client, 'close_image_transport', None)
+            if callable(close_images):
+                close_images()
         return {'status': progress['status'], 'completedSpus': len(progress['completedSpuIds']), 'deferredSpus': len(progress['deferredSpuIds']), 'remainingSpus': len(snapshot.jobs) - len(progress['completedSpuIds'])}

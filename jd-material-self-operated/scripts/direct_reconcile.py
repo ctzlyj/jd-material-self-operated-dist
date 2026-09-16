@@ -36,25 +36,43 @@ def verified_title_rows(client, spu_ids, scope_rows):
         raise ValueError('verified scope readback is missing a requested SPU')
     return selected
 
+def selected_audit_ids(progress, *, include_completed=False, requested=None):
+    eligible = set(progress['deferredSpuIds'])
+    if include_completed:
+        eligible.update(progress['completedSpuIds'])
+    if requested is not None:
+        if not requested or len(set(requested)) != len(requested) or (not set(requested) <= eligible):
+            raise ValueError('audit selection must retain recorded SPUs only')
+        return set(requested)
+    return eligible
+
 def audit_deferred(args, client=None):
     output = Path(args.output_dir).resolve()
     plan, snapshot = resume.load_direct(output, args.erp, args.confirm_token)
     progress_path = output / '.state/direct-progress.json'
     progress = manual.read_json(progress_path)
     resume.validate_progress(output, progress, {job.spu_id for job in snapshot.jobs})
-    deferred = set(progress['deferredSpuIds'])
+    deferred = selected_audit_ids(progress, include_completed=getattr(args, 'include_completed', False), requested=getattr(args, 'spu_ids', None))
     jobs = [job for job in snapshot.jobs if job.spu_id in deferred]
     destination = output / 'read-only-reconciliations' / str(time.time_ns())
     states, sources = ({}, {})
+    revised_jobs = {}
     for segment in progress['segments'].values():
         folder = Path(segment['directory'])
-        if not deferred.intersection(segment['deferred']):
+        if not deferred.intersection(set(segment['deferred']) | set(segment['completed'])):
             continue
+        import scope_revision
+        report = manual.checked_json(segment.get('reportPath', folder / 'direct-result.json'), segment['reportSha256'])
+        revised, revision = scope_revision.load(folder, expected=report.get('scopeRevision'))
+        if revision:
+            revised_jobs.update({job.spu_id: job for job in revised.prepared.jobs})
+            sources[revision['path']] = revision['sha256']
         state_path = folder / '批次001/.state/task.json'
         state = manual.read_json(state_path)
         sources[str(state_path)] = manual.sha(state_path)
         sources[str(segment.get('reportPath', folder / 'direct-result.json'))] = segment['reportSha256']
         states.update({spu: item for spu, item in state['jobs'].items() if spu in deferred})
+    jobs = [revised_jobs.get(job.spu_id, job) for job in jobs]
     options = copy(args)
     options.output_dir = output / 'read-only-client'
     options.owner_erp = plan['ownerErp']
@@ -79,9 +97,9 @@ def audit_deferred(args, client=None):
             results[job.spu_id] = result
     for path, digest in sources.items():
         manual.checked_json(path, digest)
-    report = {'erp': args.erp, 'directPlanSha256': manual.sha(output / '.state/direct-plan.json'), 'sourceReceipts': sources, 'jobs': results, 'materialReadback': material_evidence, 'titleReadback': title_evidence, 'writesPerformed': False, 'progressModified': False, 'completedSpuIds': [spu for spu, item in results.items() if item['complete']], 'remainingSpuIds': [spu for spu, item in results.items() if not item['complete']]}
+    report = {'erp': args.erp, 'directPlanSha256': manual.sha(output / '.state/direct-plan.json'), 'sourceReceipts': sources, 'jobs': results, 'materialReadback': material_evidence, 'titleReadback': title_evidence, 'writesPerformed': False, 'progressModified': False, 'includesCompletedCheckpoints': bool(getattr(args, 'include_completed', False)), 'auditRejectedSpuIds': [spu for spu, item in results.items() if any((check.get('auditRejected') for check in item['materialChecks']))], 'completedSpuIds': [spu for spu, item in results.items() if item['complete']], 'remainingSpuIds': [spu for spu, item in results.items() if not item['complete']]}
     core._save_state(destination / 'readback.json', report)
-    return {'report': str(destination / 'readback.json'), 'completedSpuIds': report['completedSpuIds'], 'remainingSpuIds': report['remainingSpuIds'], 'writesPerformed': False, 'progressModified': False}
+    return {'report': str(destination / 'readback.json'), 'completedSpuIds': report['completedSpuIds'], 'auditRejectedSpuIds': report['auditRejectedSpuIds'], 'remainingSpuIds': report['remainingSpuIds'], 'writesPerformed': False, 'progressModified': False}
 
 def main():
     parser = argparse.ArgumentParser(description='Read-only exact reconciliation of deferred direct tasks')
@@ -90,6 +108,8 @@ def main():
     parser.add_argument('--confirm-token', required=True)
     parser.add_argument('--webcli-profile')
     parser.add_argument('--timeout', type=float, default=180)
+    parser.add_argument('--include-completed', action='store_true')
+    parser.add_argument('--spu-ids', nargs='+')
     args = parser.parse_args()
     print(json.dumps(audit_deferred(args), ensure_ascii=False, indent=2))
 if __name__ == '__main__':

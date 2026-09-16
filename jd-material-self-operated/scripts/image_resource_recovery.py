@@ -11,7 +11,9 @@ import jd_material_agent as core
 
 class ImageResourceRecovery:
 
-    def __init__(self, client, output, *, clock=time.time, wait=None, paused=None):
+    def __init__(self, client, output, *, clock=time.time, wait=None, paused=None, window_seconds=300):
+        if window_seconds not in (300, 1800):
+            raise ValueError('resource cooldown window must be 300 or explicitly authorized 1800 seconds')
         self.client = client
         self.root = Path(output) / '.state/image-resource-recovery'
         self.path = self.root / 'current.json'
@@ -20,6 +22,16 @@ class ImageResourceRecovery:
         self.paused = paused or (lambda: False)
         self.lock = threading.Lock()
         self.state = json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {}
+        self.window_seconds = window_seconds
+        if self.state and self.state.get('status') != 'resolved' and (window_seconds == 1800):
+            deadline = self.state['firstBlockedAt'] + window_seconds
+            if deadline > self.state['deadline'] and self.clock() < deadline:
+                original = self.path.read_bytes()
+                archive = self.root / 'window-authorizations' / f'{time.time_ns()}-previous.json'
+                archive.parent.mkdir(parents=True, exist_ok=True)
+                archive.write_bytes(original)
+                self.state.update(deadline=deadline, status='waiting', windowSeconds=window_seconds, nextProbeAt=max(self.clock() + 300, self.state.get('lastProbeAt', self.state['firstBlockedAt']) + 600), windowExtension={'authorizedAt': self.clock(), 'windowSeconds': window_seconds, 'previous': {'path': str(archive), 'sha256': hashlib.sha256(original).hexdigest()}})
+                self.save()
         self.pending = None
         self.probing = False
         self.probe_thread = None
@@ -31,6 +43,9 @@ class ImageResourceRecovery:
 
     def save(self):
         core._save_state(self.path, self.state)
+
+    def retry_delay(self):
+        return 600 if self.state.get('windowSeconds', self.window_seconds) == 1800 else 120
 
     def resolve(self, proof):
         self.state.update(status='resolved', resolvedAt=self.clock(), resolutionProof=proof)
@@ -74,7 +89,7 @@ class ImageResourceRecovery:
             observed = self.clock()
             signature = self.signature(method, url, kwargs)
             if not self.state or self.state.get('status') == 'resolved':
-                self.state = {'firstBlockedAt': observed, 'deadline': observed + 300, 'probeAttempts': 0, 'nextProbeAt': observed + 60}
+                self.state = {'firstBlockedAt': observed, 'deadline': observed + self.window_seconds, 'windowSeconds': self.window_seconds, 'probeAttempts': 0, 'nextProbeAt': observed + (300 if self.window_seconds == 1800 else 60)}
             if self.pending is None:
                 self.pending = (method, url, deepcopy(kwargs))
                 self.state['requestHash'] = signature
@@ -131,7 +146,7 @@ class ImageResourceRecovery:
         except _protected_core.ProtectedCoreError:
             raise
         except core.ImageModelResourceBlocked:
-            self.state.update(status='waiting', nextProbeAt=self.clock() + 120)
+            self.state.update(status='waiting', nextProbeAt=self.clock() + self.retry_delay())
             self.save()
         except RuntimeError as error:
             if not self.client.quota_exhausted and (not self.client.authentication_failed) and core.is_moderation_error(error):
@@ -144,12 +159,12 @@ class ImageResourceRecovery:
                 self.resolve('resource-accessible-request-specific-rejection-cached')
                 return
             self.client.image_resource_blocked = True
-            self.state.update(status='waiting', nextProbeAt=self.clock() + max(120, self.client.last_request_retry_delay))
+            self.state.update(status='waiting', nextProbeAt=self.clock() + max(self.retry_delay(), self.client.last_request_retry_delay))
             self.save()
             raise
         except Exception:
             self.client.image_resource_blocked = True
-            self.state.update(status='waiting', nextProbeAt=self.clock() + max(120, self.client.last_request_retry_delay))
+            self.state.update(status='waiting', nextProbeAt=self.clock() + max(self.retry_delay(), self.client.last_request_retry_delay))
             self.save()
             raise
         finally:

@@ -71,6 +71,8 @@ def _call(function, arguments):
         raise ProtectedCoreError('CORE_FUNCTION_NOT_ALLOWED')
     request = {'version': 1, 'product': product, 'operation': 'core-call', 'requestId': str(uuid.uuid4()),
                'payload': {'function': function, 'arguments': encode(arguments)}}
+    if SETTINGS.get('requestCoreVersion') is True:
+        request['coreVersion'] = SETTINGS['coreVersion']
     reply = exchange(request)
     if not isinstance(reply, dict):
         raise ProtectedCoreError('CORE_RESPONSE_INVALID')

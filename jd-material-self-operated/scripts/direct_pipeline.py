@@ -67,9 +67,12 @@ class Lookahead:
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='direct-generation')
         self.future = None
         self.identifiers = None
+        self.scope_error = None
 
     def start(self, result):
         import direct_resume as resume
+        if self.scope_error is not None:
+            raise self.scope_error
         if self.future is not None:
             raise ValueError('only one lookahead segment is allowed')
         if resume.pause_requested(self.output):
@@ -79,7 +82,13 @@ class Lookahead:
         path = folder / '.state/self-operated-plan.json'
         self.progress['prefetchedSegment'] = {'spuIds': identifiers, 'planPath': str(path), 'planSha256': manual.sha(path)}
         core._save_state(self.output / '.state/direct-progress.json', self.progress)
-        prepared = resume.prepare_direct_generation(result, self.records, folder, self.args, self.client, self.roots)
+        try:
+            prepared = resume.prepare_direct_generation(result, self.records, folder, self.args, self.client, self.roots)
+        except ValueError as error:
+            if str(error) not in {'SKU scope changed since confirmation; create a new plan', 'authorized product scope changed since confirmation'}:
+                raise
+            self.scope_error = error
+            return
         self.identifiers = identifiers
         self.future = self.executor.submit(resume.generate_direct_materials, result, self.args, folder, self.model, prepared)
 

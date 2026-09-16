@@ -24,7 +24,7 @@ import httpx
 from openpyxl import Workbook, load_workbook
 from PIL import Image, ImageOps
 VARIANT_ID = 'internal-self-operated'
-SKILL_VERSION = '2026.09.15.2'
+SKILL_VERSION = '2026.09.16.9'
 MAX_SPUS_PER_BATCH = 199
 MAX_SPU_CONCURRENCY = 50
 JDO_IMAGE_BASE = 'https://img14.360buyimg.com/imgzone/'
@@ -969,8 +969,10 @@ def _clear_self_operated_replacement_sources(result):
             replace_slots.add('transparent')
             if any((row.get('whiteStatus') in {'missing', 'rejected', 'invalid'} for row in result.report_rows if row['spuId'] == job.spu_id)):
                 replace_slots.add('white')
+        reports = [row for row in result.report_rows if row['spuId'] == job.spu_id]
         for slot in replace_slots:
-            uploaded.pop(slot, None)
+            if not reports or any((row.get(f'{slot}Status') != 'approved' for row in reports)):
+                uploaded.pop(slot, None)
     return result
 
 def reconcile_self_operated_segment(original, jobs, inspections):
@@ -1051,6 +1053,7 @@ def _inspect_self_operated_rows(client, shop: dict[str, Any], spu_rows: list[dic
             elif short_status == 'missing':
                 short_missing.append(sku_id)
             sku_reports.append({'shopName': cell_text(shop.get('shopName')), 'maskedShopId': cell_text(shop.get('maskedShopId')), 'spuId': spu_id, 'skuId': sku_id, 'productName': cell_text(spu.get('productName')) or cell_text(sku.get('skuName')), 'skuName': cell_text(sku.get('skuName')), 'score': cell_text(spu.get('score')), 'scoreStatus': _self_score_status(spu.get('score')), **{f'{slot}Status': image_states[slot] for slot in SELF_OPERATED_IMAGE_SLOTS}, 'sellingPointCount': len(points), 'sellingPointsStatus': points_status, 'shortTitle': short_title, 'shortTitleStatus': short_status, 'maintenanceItems': [], 'waitingItems': [slot for slot, state in image_states.items() if state == 'pending'], 'unsupportedItems': [slot for slot, state in image_states.items() if state == 'unsupported'], 'reusedMaterialUrls': reused_urls, 'inspectionError': '', 'materialTask': False, 'shortTitleTask': short_status == 'missing'})
+            sku_reports[-1]['rejectedMaterials'] = [{'slot': slot, 'materialType': material_type, 'order': order, 'url': cell_text(material.get('url')), 'reason': cell_text(material.get('reason'))} for slot, (material_type, order) in SELF_OPERATED_IMAGE_SLOTS.items() for material in sku.get('materials') or [] if int(material.get('type') or 0) == material_type and int(material.get('order') or 0) == order and (int(material.get('status') or 0) == 5)]
         points_conflict = len(complete_point_sets) > 1
         if points_conflict:
             for row in sku_reports:
@@ -1113,6 +1116,7 @@ def _inspect_self_operated_rows(client, shop: dict[str, Any], spu_rows: list[dic
             existing_materials.pop(spu_id, None)
     prepared = PreparedSource('self-operated-live', '自动巡检底表', headers, tuple(prepared_rows), tuple(jobs), sum((len(inspection_by_spu[spu_id].get('skus') or []) for spu_id in requested_ids)), sum((len(inspection_by_spu[spu_id].get('skus') or []) for spu_id in requested_ids)) - len(prepared_rows), 0)
     summary = _summarize_self_operated_report(report_rows, total_spus=total, inspected_spus=len(spu_rows), failed_spus=len(failed_set), pagination_complete=len(spu_rows) == total)
+    summary.update({'rejectedSpus': len({row['spuId'] for row in report_rows if row.get('rejectedMaterials')}), 'rejectedSkus': len({row['skuId'] for row in report_rows if row.get('rejectedMaterials')})})
     safe_to_continue = not failed_set and scope != 'sample'
     summary.update({'discoveryScope': scope, 'targetSpuId': target, 'fullInventoryVerified': scope == 'full' and summary['paginationComplete'], 'safeToContinue': safe_to_continue, 'emptySkuSpus': sorted(empty_sku_spus)})
     return SelfOperatedDiscoveryResult(prepared, reference_urls, existing_materials, tuple(report_rows), tuple(dict.fromkeys(failed_spus)), summary, cell_text(shop.get('shopName')), cell_text(shop.get('maskedShopId')), safe_to_continue)
@@ -1282,6 +1286,8 @@ class ModelClient:
 
     def _request(self, method: str, url: str, *, request_gate=None, max_attempts=4, **kwargs) -> httpx.Response:
         last_error = None
+        if getattr(self, 'no_generation_retries', False):
+            max_attempts = 1
         image_request = urlparse(url).path.endswith('/images/edits')
         recovery = getattr(self, 'image_resource_recovery', None) if image_request else None
         if recovery is not None:
@@ -1309,6 +1315,8 @@ class ModelClient:
                 if self.authentication_failed:
                     raise RuntimeError('model authentication failed; further dispatch stopped')
                 response = self.http.request(method, url, **kwargs)
+                if image_request and callable(getattr(self, 'observe_image_response', None)):
+                    self.observe_image_response(response)
                 if response.status_code < 400:
                     return response
                 if recovery is not None:
@@ -1356,7 +1364,7 @@ class ModelClient:
             self.last_request_retry_delay = delay
             if attempt < max_attempts - 1:
                 time.sleep(delay)
-        raise ModelTransientError(str(last_error) or '模型请求失败。')
+        raise ModelTransientError(str(last_error) or '模型请求失败。') from last_error
 
     def text(self, system: str, user: str) -> str:
         with self.text_semaphore:
@@ -1406,20 +1414,22 @@ class ModelClient:
     def selling_points(self, title: str) -> list[str]:
         system, user = selling_point_prompts(title)
         last_error = None
-        for _ in range(3):
+        attempts = 1 if getattr(self, 'no_generation_retries', False) else 3
+        for _ in range(attempts):
             try:
                 return validate_selling_points(_json_object(self.text(system, user))['selling_points'])
             except (KeyError, TypeError, ValueError) as error:
                 last_error = error
                 user += '\n上次输出不合规，请只重写 JSON 并严格遵守长度和禁用词。'
-        raise ValueError(f'连续3次未生成合规卖点：{last_error}')
+        raise ValueError(f'连续{attempts}次未生成合规卖点：{last_error}')
 
     def short_titles(self, skus: Iterable[tuple[str, str]]) -> dict[str, str]:
         skus = tuple(skus)
         expected = {sku_id for sku_id, _ in skus}
         system, user = short_title_prompts(skus)
         last_error = None
-        for _ in range(3):
+        attempts = 1 if getattr(self, 'no_generation_retries', False) else 3
+        for _ in range(attempts):
             try:
                 rows = _json_object(self.text(system, user))['short_titles']
                 result = {cell_text(item['sku_id']): cell_text(item['short_title']) for item in rows}
@@ -1429,7 +1439,7 @@ class ModelClient:
             except (KeyError, TypeError, ValueError) as error:
                 last_error = error
                 user += '\n上次输出不合规，请只重写缺失或长度不合规项并保持 SKUID 精确一致。'
-        raise ValueError(f'连续3次未生成合规短标题：{last_error}')
+        raise ValueError(f'连续{attempts}次未生成合规短标题：{last_error}')
 
 def _square_800(image: Image.Image, background: tuple[int, ...]) -> Image.Image:
     image = ImageOps.exif_transpose(image)
@@ -1449,15 +1459,15 @@ def normalize_jpeg(content: bytes, output: Path, pure_white: bool=False) -> None
             inset.thumbnail((760, 760), Image.Resampling.LANCZOS)
             image = Image.new('RGB', (800, 800), (255, 255, 255))
             image.paste(inset, ((800 - inset.width) // 2, (800 - inset.height) // 2))
-        pixels = image.load()
-        for y in range(image.height):
-            for x in range(image.width):
-                red, green, blue = pixels[x, y]
-                if min(red, green, blue) >= 235 and max(red, green, blue) - min(red, green, blue) <= 24:
-                    pixels[x, y] = (255, 255, 255)
     output.parent.mkdir(parents=True, exist_ok=True)
     for quality in (95, 92, 88, 84, 80, 75):
         image.save(output, 'JPEG', quality=quality, optimize=True, progressive=True, subsampling=0)
+        if pure_white and output.stat().st_size <= 1000000 and (not valid_material_image(output, 'white')):
+            inset = image.copy()
+            inset.thumbnail((760, 760), Image.Resampling.LANCZOS)
+            image = Image.new('RGB', (800, 800), (255, 255, 255))
+            image.paste(inset, ((800 - inset.width) // 2, (800 - inset.height) // 2))
+            image.save(output, 'JPEG', quality=quality, optimize=True, progressive=True, subsampling=0)
         if output.stat().st_size <= 1000000:
             return
     raise ValueError(f'JPG 超过 1MB：{output}')
@@ -1485,7 +1495,7 @@ def make_transparent(source: Path, output: Path) -> None:
     while queue:
         x, y = queue.popleft()
         pixel = pixels[x, y]
-        if min(pixel) < 225 or max(pixel) - min(pixel) > 36:
+        if min(pixel) < 248 or max(pixel) - min(pixel) > 8:
             continue
         background[y * width + x] = 1
         if x:
@@ -1563,7 +1573,10 @@ def restore_uploaded_white(url: str, output: Path, timeout: float) -> None:
     response.raise_for_status()
     if len(response.content) > 20000000:
         raise ValueError('已确认白底图超过 20MB，拒绝处理。')
-    normalize_jpeg(response.content, output, pure_white=True)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(response.content)
+    if not valid_material_image(output, 'white'):
+        normalize_jpeg(response.content, output, pure_white=True)
 
 def _request_image_set(client: ModelClient, kinds: Iterable[str], source: Path, title: str | None) -> tuple[dict[str, bytes], dict[str, Exception]]:
     kinds = tuple(kinds)
@@ -1733,6 +1746,8 @@ def _validate_uploaded_image_url(url: str, timeout: float=20.0, attempts: int=5,
     raise ValueError(str(last_error or 'uploaded image GET verification failed'))
 
 def upload_self_operated_materials(client: Any, prepared: PreparedSource, output_dir: str | Path, category_id: int=0, *, images_dir: str | Path | None=None, selected_spu_ids: set[str] | None=None) -> UploadResult:
+    import upload_quarantine
+    upload_quarantine.assert_write_targets(output_dir, selected_spu_ids if selected_spu_ids is not None else {job.spu_id for job in prepared.jobs})
     images = Path(images_dir) if images_dir else Path(output_dir) / '全部图片'
     files = []
     for job in prepared.jobs:
@@ -1781,6 +1796,7 @@ def _submit_self_operated_upload_batch(client, pending, category_id, ledger, led
 
 def _upload_self_operated_materials(client: Any, prepared: PreparedSource, output_dir: str | Path, category_id: int=0, *, images_dir: str | Path | None=None, selected_spu_ids: set[str] | None=None) -> UploadResult:
     output = Path(output_dir)
+    transport = 'self-operated-direct-http-sff' if getattr(client, 'image_transport', 'browser') == 'direct-http' else 'self-operated-browser-sff'
     images = Path(images_dir) if images_dir else output / '全部图片'
     state_path = output / '.state' / 'task.json'
     state = _load_state(state_path)
@@ -1894,7 +1910,7 @@ def _upload_self_operated_materials(client: Any, prepared: PreparedSource, outpu
                     shutil.copyfile(path, upload_path)
                 if hashlib.sha256(upload_path.read_bytes()).hexdigest() != digest:
                     raise ValueError('upload alias content differs from the approved image')
-            ledger['files'][path.name] = {'sha256': digest, 'kind': kind, 'remoteName': remote_name, 'status': 'uploading', 'submittedAt': int(time.time()), 'transport': 'self-operated-browser-sff'}
+            ledger['files'][path.name] = {'sha256': digest, 'kind': kind, 'remoteName': remote_name, 'status': 'uploading', 'submittedAt': int(time.time()), 'transport': transport}
             _save_upload_ledger(ledger_path, ledger)
             if batch_supported:
                 pending_uploads.append({'spuId': job.spu_id, 'kind': kind, 'filename': path.name, 'path': upload_path, 'remoteName': remote_name})
@@ -1906,7 +1922,7 @@ def _upload_self_operated_materials(client: Any, prepared: PreparedSource, outpu
                 response = _self_operated_remote_image(client.upload_image(upload_path, int(category_id)))
                 if response['name'] != remote_name:
                     raise ValueError('image-space API returned a different filename')
-                ledger['files'][path.name] = {'sha256': digest, 'kind': kind, 'path': response['path'], 'url': response['url'], 'imageId': response['imageId'], 'remoteName': response['name'], 'status': 'submitted', 'submittedAt': int(time.time()), 'transport': 'self-operated-browser-sff'}
+                ledger['files'][path.name] = {'sha256': digest, 'kind': kind, 'path': response['path'], 'url': response['url'], 'imageId': response['imageId'], 'remoteName': response['name'], 'status': 'submitted', 'submittedAt': int(time.time()), 'transport': transport}
                 _save_upload_ledger(ledger_path, ledger)
                 submitted.append((job.spu_id, kind, path.name, response))
             except _protected_core.ProtectedCoreError:
@@ -2132,6 +2148,9 @@ def _write_results(prepared: PreparedSource, output: Path, state: dict, failures
     return BatchResult(len(prepared.jobs), len(completed), len(incomplete), output, manifest_path, short_title_path, failure_path)
 
 def generate_batch(prepared: PreparedSource, reference_dir: str | Path, output_dir: str | Path, *, spu_concurrency: int=5, image_concurrency: int | None=None, timeout: float=600.0, existing_url_exports: Iterable[str | Path]=(), existing_materials: dict[str, dict[str, Any]] | None=None, model_client_factory=None) -> BatchResult:
+    import upload_quarantine
+    quarantined = upload_quarantine.for_batch(output_dir)
+    jobs = tuple((job for job in prepared.jobs if job.spu_id not in quarantined))
     if not 1 <= spu_concurrency <= MAX_SPU_CONCURRENCY:
         raise ValueError('SPU 并发必须为 1-50。')
     output = Path(output_dir)
@@ -2141,7 +2160,7 @@ def generate_batch(prepared: PreparedSource, reference_dir: str | Path, output_d
     reference_dir = Path(reference_dir)
     state = _load_state(state_path)
     _bind_state(state, prepared, state_path)
-    for job in prepared.jobs:
+    for job in jobs:
         seed = (existing_materials or {}).get(job.spu_id) or {}
         if not seed:
             continue
@@ -2158,7 +2177,7 @@ def generate_batch(prepared: PreparedSource, reference_dir: str | Path, output_d
     _save_state(state_path, state)
     if existing_url_exports:
         existing_urls = load_url_exports(existing_url_exports)
-        for job in prepared.jobs:
+        for job in jobs:
             names = image_names(job.spu_id)
             uploaded = dict(state['jobs'].setdefault(job.spu_id, {}).get('uploaded_urls') or {})
             for kind, filename in names.items():
@@ -2171,7 +2190,7 @@ def generate_batch(prepared: PreparedSource, reference_dir: str | Path, output_d
     state_lock = threading.Lock()
 
     def needs_model_client() -> bool:
-        for job in prepared.jobs:
+        for job in jobs:
             item = state.get('jobs', {}).get(job.spu_id, {})
             if job.needs_selling_points and (not item.get('selling_points')):
                 return True
@@ -2185,7 +2204,7 @@ def generate_batch(prepared: PreparedSource, reference_dir: str | Path, output_d
     client = None
     if needs_model_client():
         client = model_client_factory() if model_client_factory else ModelClient(os.environ.get(PROVIDER.api_key_env, ''), timeout=timeout, image_concurrency=image_concurrency)
-    failures: list[tuple[SpuJob, str]] = []
+    failures: list[tuple[SpuJob, str]] = [(job, upload_quarantine.REASON) for job in prepared.jobs if job.spu_id in quarantined]
 
     def save_job(spu_id: str, key: str, value) -> None:
         with state_lock:
@@ -2322,8 +2341,8 @@ def generate_batch(prepared: PreparedSource, reference_dir: str | Path, output_d
             raise RuntimeError('；'.join(dict.fromkeys(errors)))
         complete_job(job.spu_id)
     try:
-        with ThreadPoolExecutor(max_workers=min(spu_concurrency, max(1, len(prepared.jobs)))) as executor:
-            futures = {executor.submit(process, job): job for job in prepared.jobs}
+        with ThreadPoolExecutor(max_workers=min(spu_concurrency, max(1, len(jobs)))) as executor:
+            futures = {executor.submit(process, job): job for job in jobs}
             for future in as_completed(futures):
                 job = futures[future]
                 try:
@@ -2442,12 +2461,14 @@ def _subset_prepared(prepared: PreparedSource, rows: list[SourceRow]) -> Prepare
     return PreparedSource(prepared.source_type, prepared.sheet_name, prepared.headers, tuple(rows), selected_jobs, len(rows), 0, 0)
 
 def _generate_erp_materials(result, args, output, *, model_client_factory=None):
+    import upload_quarantine
     for index, rows in enumerate(split_rows_by_spu(result.prepared.rows, maximum_spus=50), 1):
         batch = _subset_prepared(result.prepared, rows)
         folder = output / f'批次{index:03d}'
         references = folder / '参考图'
+        quarantined = upload_quarantine.for_batch(folder)
         for job in batch.jobs:
-            if not _model_kinds(job):
+            if job.spu_id in quarantined or not _model_kinds(job):
                 continue
             path = references / f'{job.spu_id}.jpg'
             if path.is_file():

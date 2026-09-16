@@ -51,6 +51,7 @@ class MaterialBindingResult:
     failed_spu_ids: tuple[str, ...] = ()
     readback_path: Path | None = None
     readback_sha256: str = ''
+    readback_deferred: bool = False
 
 class ShortTitleBatchIncomplete(RuntimeError):
     pass
@@ -73,6 +74,21 @@ def _binding_material(material_type: int, order: int, value: str, sku_id: str) -
 
 def build_material_binding_requests(job: SpuJob, state_item: dict[str, Any]) -> list[dict[str, Any]]:
     return _protected_core.call('direct_binding.build_material_binding_requests', locals())
+
+def rejected_material_matches(request, materials_by_sku):
+    matches = []
+    material_type = int(request['materialType'])
+    for desired in request['body']['skuMaterials']:
+        sku_id = cell_text(desired['skuId'])
+        targets = {(int(item['order']), _material_value(item) if material_type == 1002 else _jfs_path(_material_value(item))) for item in desired['materials']}
+        for actual in materials_by_sku.get(sku_id, []):
+            if int(actual.get('materialType') or 0) != material_type or int(actual.get('status') or 0) not in (2, 5):
+                continue
+            value = _material_value(actual)
+            value = value if material_type == 1002 else _jfs_path(value)
+            if (int(actual.get('order') or 0), value) in targets:
+                matches.append({'skuId': sku_id, 'reason': cell_text(actual.get('reason'))})
+    return matches
 
 def _evaluate_binding_request(request: dict[str, Any], materials_by_sku: dict[str, list[dict[str, Any]]]) -> tuple[str, str]:
     pending = False
@@ -147,6 +163,11 @@ def _record_short_title_outcomes(body, error, desired, accepted, unconfirmed, re
     return submitted
 
 def submit_self_operated_short_titles(client, spu_ids, desired, output: Path, *, expected_before=None, defer_conflicts=False) -> dict[str, Any]:
+    import upload_quarantine
+    upload_quarantine.assert_write_targets(output, spu_ids)
+    if getattr(client, 'short_title_transport', 'product') == 'osw':
+        import osw_title_tasks
+        return osw_title_tasks.submit(client, spu_ids, desired, output, expected_before=expected_before, defer_conflicts=defer_conflicts)
     if not desired:
         return {'submitted': 0, 'verified': 0, 'reused': 0, 'failed': [], 'pending': []}
     before = client.short_title_rows(spu_ids)
@@ -194,6 +215,7 @@ def submit_self_operated_short_titles(client, spu_ids, desired, output: Path, *,
     requests = [body for body in requests if body['reqList']]
     audit = {'before': before, 'requests': requests, 'submittedTitles': accepted, 'unconfirmedTitles': unconfirmed, 'rejectedTitles': rejected, 'conflictingTitles': conflicting, 'deferredSpus': sorted(deferred_spus), 'unavailableSkus': sorted(unavailable), 'requestHash': _auto_maintain_plan_hash({'requests': requests})}
     history_path = output / '.state' / 'short-title-history' / f'{time.time_ns()}-{uuid.uuid4().hex}.json'
+    audit['transport'] = 'osw' if getattr(client, 'title_audit_transport', 'product') == 'osw' else 'product'
 
     def save_audit():
         _save_state(history_path, audit)
@@ -228,6 +250,11 @@ def submit_self_operated_short_titles(client, spu_ids, desired, output: Path, *,
         save_audit()
         if stop_writes:
             break
+    if getattr(client, 'defer_readback', False) is True and (not unconfirmed):
+        failed = sorted((set(rejected) | set(conflicting) | unavailable) & set(desired))
+        audit.update(errors=errors, failed=failed, pending=sorted(set(accepted) & set(desired)), readbackDeferred=True)
+        save_audit()
+        return {'submitted': submitted, 'verified': 0, 'reused': sum((before_values.get(sku) == title for sku, title in ready.items())), 'failed': failed, 'pending': audit['pending'], 'readbackDeferred': True}
     after = client.short_title_rows(spu_ids) if ready else before
     expected = {cell_text(row['skuId']): cell_text(row['shortTitle']) for row in before if row.get('shortTitleKnown') is True}
     expected.update(desired)
@@ -364,6 +391,8 @@ def _self_operated_persisted_binding_status(request, materials_by_sku, state_ite
     return ('failed', 'binding submission unconfirmed; reconcile before retrying: ' + reason)
 
 def prepare_self_operated_binding_plan(client: Any, prepared: PreparedSource, output_dir: str | Path, *, selected_spu_ids: set[str] | None=None) -> MaterialBindingPlan:
+    import upload_quarantine
+    upload_quarantine.assert_write_targets(output_dir, selected_spu_ids if selected_spu_ids is not None else {job.spu_id for job in prepared.jobs})
     output = Path(output_dir)
     state_path = output / '.state' / 'task.json'
     state = _load_state(state_path)
@@ -402,6 +431,10 @@ def prepare_self_operated_binding_plan(client: Any, prepared: PreparedSource, ou
             receipt = state_item.get('material_submission_receipts', {}).get(str(material_type), {})
             status, reason = _self_operated_persisted_binding_status(request, materials_by_sku, state_item)
             current = {'fingerprint': request['fingerprint'], 'status': status, 'reason': reason, 'updatedAt': int(time.time())}
+            rejected = rejected_material_matches(request, materials_by_sku)
+            if rejected:
+                binding_state[str(material_type)] = {**current, 'status': 'failed', 'reason': 'same rejected material requires corrected replacement; not resubmitted', 'rejectedMaterials': rejected}
+                continue
             if status in {'approved', 'pending'}:
                 binding_state[str(material_type)] = current
                 continue
@@ -559,6 +592,8 @@ def _execute_self_operated_binding_batches(client, plan, state, state_path, requ
     return submitted
 
 def execute_self_operated_binding_plan(client: Any, plan: MaterialBindingPlan) -> MaterialBindingResult:
+    import upload_quarantine
+    upload_quarantine.assert_write_targets(plan.output_dir, {request['spuId'] for request in (*plan.requests, *plan.authorization_requests)})
     state_path = plan.output_dir / '.state' / 'task.json'
     state = _load_state(state_path)
     _bind_state(state, plan.prepared, state_path)
@@ -596,6 +631,11 @@ def execute_self_operated_binding_plan(client: Any, plan: MaterialBindingPlan) -
         finally:
             _save_state(state_path, state)
     material_jobs = [job for job in plan.prepared.jobs if job.spu_id in requests_by_spu]
+    if getattr(client, 'defer_readback', False) is True and (not any((item.get('material_submission_intents') for item in state['jobs'].values()))):
+        readback_path = plan.output_dir / '.state' / f'binding-deferred-{time.time_ns()}.json'
+        _save_state(readback_path, {'materialsBySku': {}, 'queryFailures': {}, 'readbackDeferred': True})
+        failed = {item['spuId']: item['reason'] for item in plan.preflight_failures}
+        return MaterialBindingResult(submitted, 0, 0, len(failed), False, False, None, None, None, None, failures=tuple(failed.values()), failed_spu_ids=tuple(failed), readback_path=readback_path, readback_sha256=hashlib.sha256(readback_path.read_bytes()).hexdigest(), readback_deferred=True)
     materials_by_sku: dict[str, list[dict[str, Any]]] = {}
     query_failures: dict[str, str] = {}
     try:
@@ -667,7 +707,66 @@ def confirm_self_operated_writes(output: Path, payload: dict, token: str) -> str
 
 class WebcliSelfOperatedClient(core.WebcliSelfOperatedClient):
 
+    def osw_title_action(self, action):
+        client = getattr(self, '_osw_title_client', None)
+        if client is None:
+            client = core.WebcliSelfOperatedClient(profile=self.profile, session=self.session + '-osw-titles', timeout=self.timeout)
+            self._osw_title_client = client
+        if not client.initialized:
+            client._ensure_browser_page('https://osw.jd.com/site-fe/batch-task/create')
+            frames = client._run_webcli(['frames'])
+            frame = next((item['index'] for item in frames if item.get('url') == 'https://commodity-backend-fe-pro.local-pf.jd.com/batch-task/create'), None)
+            if frame is None:
+                raise ValueError('OSW task iframe unavailable')
+            client.osw_frame = frame
+            client.initialized = True
+        frame = client.osw_frame
+        source = Path(__file__).with_name('self_operated_osw_title_bridge.js').read_text(encoding='utf-8')
+        source = source.replace('__JD_OSW_TITLE_ACTION__', json.dumps(action, ensure_ascii=False))
+        if len(source.encode('utf-8')) < 12000:
+            return client._run_webcli(['eval', '--frame', str(frame), source])
+        key = '__jdOswSource_' + uuid.uuid4().hex
+        client._run_webcli(['eval', '--frame', str(frame), f'window.{key}=[];true'])
+        for offset in range(0, len(source), 3000):
+            client._run_webcli(['eval', '--frame', str(frame), f'window.{key}.push({json.dumps(source[offset:offset + 3000], ensure_ascii=True)});true'])
+        try:
+            return client._run_webcli(['eval', '--frame', str(frame), f'(0,eval)(window.{key}.join(""))'])
+        finally:
+            try:
+                client._run_webcli(['eval', '--frame', str(frame), f'delete window.{key}'])
+            except _protected_core.ProtectedCoreError:
+                raise
+            except Exception:
+                pass
+
+    def _image_http(self):
+        from image_space_http import ImageSpaceHttpClient
+        client = getattr(self, '_http_image_client', None)
+        if client is None:
+            client = self._http_image_client = ImageSpaceHttpClient(self.expected_erp, self.profile)
+        if (client.erp, client.profile) != (self.expected_erp, self.profile):
+            raise ValueError('cached image transport identity changed')
+        return client
+
+    def close_image_transport(self):
+        client = getattr(self, '_http_image_client', None)
+        if client is not None:
+            client.close()
+            self._http_image_client = None
+
+    def upload_images(self, paths, category_id, *, expected_hashes=None):
+        if getattr(self, 'image_transport', 'browser') == 'direct-http':
+            return self._image_http().upload_images(paths, category_id, expected_hashes=expected_hashes)
+        return super().upload_images(paths, category_id, expected_hashes=expected_hashes)
+
+    def image_page(self, category_id, page, page_size, query=''):
+        if getattr(self, 'image_transport', 'browser') == 'direct-http':
+            return self._image_http().image_page(category_id, page, page_size, query)
+        return super().image_page(category_id, page, page_size, query)
+
     def image_pages(self, category_id, queries, page_size=50):
+        if getattr(self, 'image_transport', 'browser') == 'direct-http':
+            return self._image_http().image_pages(category_id, queries, page_size)
         if not self.expected_erp or not 1 <= len(queries) <= 10 or len(set(queries)) != len(queries):
             raise ValueError('image lookup requires an ERP and one to ten distinct queries')
         if not self.image_space_initialized:
@@ -732,6 +831,8 @@ def create_direct_client(args):
     base = core.create_self_operated_erp_client(args)
     client = WebcliSelfOperatedClient.__new__(WebcliSelfOperatedClient)
     client.__dict__.update(base.__dict__)
+    client.image_transport = getattr(args, 'image_transport', 'browser')
+    client.short_title_transport = getattr(args, 'short_title_transport', 'product')
     client.product_bridge_path = Path(__file__).with_name('self_operated_direct_product_bridge.js')
     return client
 
