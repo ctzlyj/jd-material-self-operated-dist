@@ -228,12 +228,13 @@ class DualKeyModelClient(core.ModelClient):
             raise RuntimeError('image throttled; failed task skipped, both keys cooling: ' + json.dumps(evidence, ensure_ascii=False))
 
     def _request(self, method, url, *, max_attempts=4, **kwargs):
-        image_request = urlparse(url).path.endswith('/images/edits')
+        image_request = core.is_image_request_url(url)
+        transport_retry = urlparse(url).path.endswith('/images/edits')
         slot = getattr(self.local, 'slot', 0) if image_request else 0
         headers = dict(kwargs.pop('headers', {}) or {})
         headers['Authorization'] = 'Bearer ' + self.keys[slot]
         try:
-            for attempt in range(2 if image_request else 1):
+            for attempt in range(2 if transport_retry else 1):
                 try:
                     return super()._request(method, url, max_attempts=1, headers=headers, **kwargs)
                 except core.ModelTransientError as error:
@@ -241,7 +242,7 @@ class DualKeyModelClient(core.ModelClient):
                     if not image_request or not isinstance(cause, (core.httpx.RemoteProtocolError, core.httpx.ReadError)):
                         raise
                     self.local.event['transportErrorType'] = type(cause).__name__
-                    if attempt:
+                    if attempt or not transport_retry:
                         raise
                     self.reserve_transport_retry(cause)
         except _protected_core.ProtectedCoreError:
@@ -255,6 +256,7 @@ class DualKeyModelClient(core.ModelClient):
         event = self.local.event
         now = self.scheduler.clock()
         retry = {'attemptId': new_attempt_id(), 'requestHash': event['requestHash'], 'keySlot': event['keySlot'], 'sourcePath': event['sourcePath'], 'status': 'queued', 'queuedAt': now, 'retryOf': event['attemptId'], 'retryNumber': 1, 'recoveryStartedAt': now, 'retryDelaySeconds': TRANSPORT_RETRY_SECONDS}
+        retry.update(self.image_metadata())
         marker = self.scheduler.root / 'transport-retries' / (event['requestHash'] + '.json')
         core._save_state(marker, {'status': 'reserved', 'requestHash': event['requestHash'], 'originalAttemptId': event['attemptId'], 'retryAttemptId': retry['attemptId'], 'keySlot': event['keySlot'], 'reservedAt': now})
         event.update(status='failed', errorType=type(error).__name__, error=self.clean(str(error)), endedAt=now, elapsedSeconds=round(now - event['queuedAt'], 6), retryAttemptId=retry['attemptId'])
@@ -266,9 +268,18 @@ class DualKeyModelClient(core.ModelClient):
             self.scheduler.wait(1.0)
         self.scheduler.check()
 
+    def image_signature(self, prompt, source_path):
+        return core._auto_maintain_plan_hash({'prompt': prompt, 'model': core.PROVIDER.image_model, 'sourceSha256': hashlib.sha256(source_path.read_bytes()).hexdigest(), 'size': '1024x1024'})
+
+    def image_metadata(self):
+        return {}
+
+    def request_image(self, prompt, source_path):
+        return super().edit_image(prompt, source_path)
+
     def edit_image(self, prompt, source_path):
         source_path = Path(source_path)
-        signature = core._auto_maintain_plan_hash({'prompt': prompt, 'model': core.PROVIDER.image_model, 'sourceSha256': hashlib.sha256(source_path.read_bytes()).hexdigest(), 'size': '1024x1024'})
+        signature = self.image_signature(prompt, source_path)
         failure = self.scheduler.root / 'failures' / (signature + '.json')
         if failure.exists():
             raise RuntimeError('image request previously failed; no retry or alternate key')
@@ -278,10 +289,11 @@ class DualKeyModelClient(core.ModelClient):
         slot = self.scheduler.acquire()
         self.local.slot = slot
         event = {'attemptId': new_attempt_id(), 'requestHash': signature, 'keySlot': slot + 1, 'status': 'queued', 'sourcePath': str(source_path), 'queuedAt': self.scheduler.clock()}
+        event.update(self.image_metadata())
         self.local.event = event
         started = time.monotonic()
         try:
-            image = super().edit_image(prompt, source_path)
+            image = self.request_image(prompt, source_path)
             with core.Image.open(BytesIO(image)) as decoded:
                 decoded.verify()
             event = self.local.event

@@ -62,6 +62,8 @@ Before live execution verify both independent releases, clean installs, template
 
 ## Authentication and background work
 
+The development-only Gemini candidate is described in `references/gemini-routing.md`. It explicitly routes scene/white images to either Gemini image model, optionally routes selling images to Gemini, excludes Product-Pro, and keeps transparency local. It does not change legacy defaults, grant production eligibility, bypass unresolved writes, or establish a maximum stable concurrency. Do not enable it for live maintenance until provider production permission and the original task's unknown-write gates are resolved.
+
 For explicitly authorized dual-key production with terminal failure skipping, read `references/dual-key-generation.md` and use `run-direct --dual-key-images --no-generation-retries --defer-incomplete --defer-readback`. The two credentials retain two slots each, one global four-slot limit and the original one-start-per-second gate, with conservative two-second same-key pacing. This opt-in is not a claim of proven speedup; single-key remains the default. Do not combine it with same-request resource probes.
 
 The sole automatic retry exception in dual-key mode is an interrupted image response (`httpx.RemoteProtocolError` or `httpx.ReadError`): wait five seconds, then make at most one extra attempt with the same credential and frozen payload through the same gates. Read `references/image-transport-retry.md` for persistent retry reservations, audit counts and stop rules. It never reopens historical failures, retries safety rejection or uncertain product writes, or changes single-key/text behavior.
@@ -70,7 +72,9 @@ Dual-key 429 cooldown follows valid `Retry-After`; absent/invalid values use 60 
 
 Discover capabilities through O2 first. Use the bundled, pinned `webcli-browser-runtime` companion's safe transport, dedicated background sessions and existing authentication. Do not focus or navigate working tabs. Do not edit npm packages or bypass a merge-required guard.
 
-If the process lacks the model key, the agent runs `scripts/secure_launcher.py -- <command>` for local masked entry. Never request the key in chat, print it, persist it or copy it from historical conversations. A login or quota failure pauses work with cache intact.
+For custom batches spanning multiple output directories, read `references/browser-session-lifecycle.md` before opening pages. Reusing a Python client does not reuse browser sessions when `owned_client()` changes its output-derived session name. Release and verify each group's owned sessions before the next group; a background window is not a resource limit.
+
+Read `references/secure-credentials.md` for setup and repeated-key-dialog problems. Reuse process/current-user environment or the OS-protected credential store; only genuinely missing generation credentials trigger masked local entry. The normal CLI and secure launcher share this resolver. Never request keys in chat, print them, store plaintext or copy historical credentials. Help, planning and cached-only/readback commands must not prompt. Login/quota failure pauses work with cache intact, never clears credentials or opens a retry loop.
 
 Report generated files, real HTTP request counts, binding acceptance, exact persisted values, audit status, remaining tasks, timing and recovery separately. Workbook delivery, accepted writes and old unrelated pending materials are not interchangeable. Source details and queue counts are cached unless explicitly refreshed.
 

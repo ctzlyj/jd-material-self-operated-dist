@@ -1,73 +1,59 @@
-import protected_core as _protected_core
 import argparse
-import getpass
 import importlib.util
+import json
 import os
 from pathlib import Path
 import subprocess
 import sys
-from typing import Callable, Sequence
+import secure_credentials
 SKILL_ROOT = Path(__file__).resolve().parents[1]
-AGENT_PATH = Path(__file__).with_name('jd_material_agent.py')
+AGENT_PATH = Path(__file__).with_name('self_operated_cli.py')
 REQUIREMENTS_PATH = SKILL_ROOT / 'requirements.txt'
 REQUIRED_MODULES = ('httpx', 'openpyxl', 'PIL', 'PyInstaller')
 
-def ensure_dependencies() -> None:
-    missing = [name for name in REQUIRED_MODULES if importlib.util.find_spec(name) is None]
-    if not missing:
-        return
-    subprocess.run([sys.executable, '-m', 'pip', 'install', '-r', str(REQUIREMENTS_PATH)], check=True)
-    remaining = [name for name in REQUIRED_MODULES if importlib.util.find_spec(name) is None]
-    if remaining:
-        raise RuntimeError(f"依赖安装后仍不可用：{', '.join(remaining)}")
+def ensure_dependencies():
+    required = REQUIRED_MODULES + (('keyring',) if os.name != 'nt' else ())
+    if any((importlib.util.find_spec(name) is None for name in required)):
+        subprocess.run([sys.executable, '-m', 'pip', 'install', '-r', str(REQUIREMENTS_PATH)], check=True)
+    if any((importlib.util.find_spec(name) is None for name in required)):
+        raise RuntimeError('required dependencies unavailable after installation')
 
-def prompt_api_key() -> str:
-    value = None
-    try:
-        import tkinter as tk
-        from tkinter import simpledialog
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes('-topmost', True)
-        value = simpledialog.askstring('京东内部素材 Skill', '请粘贴本次运行使用的 API Key。Key 不会写入磁盘或命令行。', show='*', parent=root)
-        root.destroy()
-    except _protected_core.ProtectedCoreError:
-        raise
-    except Exception:
-        value = getpass.getpass('请粘贴本次运行使用的 API Key（输入不可见）：')
-    key = (value or '').strip()
-    if not key:
-        raise ValueError('未输入 API Key，已停止任务。')
-    return key
+def prompt_api_key():
+    return secure_credentials.prompt_key('JD_LLM_API_KEY')
 
-def run_agent(agent_args: Sequence[str], *, prompt: Callable[[], str]=prompt_api_key, dependency_installer: Callable[[], None]=ensure_dependencies, runner: Callable[..., object]=subprocess.run) -> int:
+def run_agent(agent_args, *, prompt=None, dependency_installer=ensure_dependencies, runner=subprocess.run, remember=True):
     if not agent_args:
-        raise ValueError('请提供 jd_material_agent.py 子命令。')
+        raise ValueError('provide a self_operated_cli.py subcommand')
     dependency_installer()
-    saved_write = False
-    if agent_args[0] == 'auto-maintain' and '--business-mode' in agent_args and ('--output-dir' in agent_args):
-        mode_index = agent_args.index('--business-mode') + 1
-        output_index = agent_args.index('--output-dir') + 1
-        if mode_index < len(agent_args) and output_index < len(agent_args) and (agent_args[mode_index] == 'self-operated'):
-            saved_write = (Path(agent_args[output_index]) / '.state' / 'self-operated-writes.json').is_file()
-    if agent_args[0] in {'plan-self-operated', 'discover-self-operated'} or '--write-confirm-token' in agent_args or saved_write:
-        result = runner([sys.executable, str(AGENT_PATH), *agent_args], check=False)
-        return int(result.returncode)
-    key = os.environ.get('JD_LLM_API_KEY', '').strip() or prompt().strip()
-    if not key:
-        raise ValueError('未输入 API Key，已停止任务。')
-    child_environment = os.environ.copy()
-    child_environment['JD_LLM_API_KEY'] = key
-    result = runner([sys.executable, str(AGENT_PATH), *agent_args], env=child_environment, check=False)
+    environment = os.environ.copy()
+    callback = (lambda name, saved: prompt()) if prompt is not None else None
+    secure_credentials.prepare_command(agent_args, environ=environment, prompt=callback, remember=remember)
+    result = runner([sys.executable, str(AGENT_PATH), *agent_args], env=environment, check=False)
     return int(result.returncode)
 
-def main(argv: Sequence[str] | None=None) -> int:
-    parser = argparse.ArgumentParser(description='自动补齐依赖，并通过本地隐藏输入为单次素材任务提供 API Key。')
+def main(argv=None):
+    parser = argparse.ArgumentParser(description='Use existing credentials or configure an OS-protected credential once.')
+    controls = parser.add_mutually_exclusive_group()
+    controls.add_argument('--credential-status', action='store_true')
+    controls.add_argument('--configure-credentials', action='store_true')
+    controls.add_argument('--forget-credentials', action='store_true')
+    parser.add_argument('--key-slot', type=int, choices=(1, 2), default=1)
+    parser.add_argument('--dual-key-images', action='store_true')
+    parser.add_argument('--session-only', action='store_true')
     parser.add_argument('agent_args', nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
-    agent_args = list(args.agent_args)
-    if agent_args[:1] == ['--']:
-        agent_args = agent_args[1:]
-    return run_agent(agent_args)
+    if args.credential_status:
+        print(json.dumps(secure_credentials.credential_status(), ensure_ascii=False))
+        return 0
+    if args.forget_credentials:
+        secure_credentials.default_store().delete(secure_credentials.NAMES[args.key_slot - 1])
+        print('Encrypted stored slot removed. Existing process/user environment is unchanged.')
+        return 0
+    if args.configure_credentials:
+        secure_credentials.ensure_environment(dual=args.dual_key_images, remember=not args.session_only)
+        print('Credentials available. No model or product request performed.')
+        return 0
+    arguments = args.agent_args[1:] if args.agent_args[:1] == ['--'] else args.agent_args
+    return run_agent(arguments, remember=not args.session_only)
 if __name__ == '__main__':
     raise SystemExit(main())

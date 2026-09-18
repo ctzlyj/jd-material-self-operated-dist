@@ -8,7 +8,7 @@ For a protected distribution, first read `protected-service.md`. Verify and inst
 
 The administrator must enable this ERP for the self-operated Skill at the protected service. Plugin and POP eligibility do not apply. HiOffice and the business browser must be logged into the same ERP; the entry checks both and selects a matching connected browser profile in isolated background sessions. If login or Browser Bridge needs human interaction, request only that action, never credentials in chat. A unavailable authorization service is not a skippable product failure.
 
-Use an existing secure `JD_LLM_API_KEY` environment. If absent, run `scripts/secure_launcher.py -- <entry command>` for masked local entry; never request, print, save or copy keys from chat. Do not rotate keys around resource restrictions.
+Read `secure-credentials.md`. Reuse `JD_LLM_API_KEY` from process/current-user environment or OS-protected storage; the normal entry and secure launcher resolve it consistently. Only a missing required key triggers masked setup with encrypted-storage disclosure. Subsequent tool calls/restarts reuse it. Never ask in chat, store plaintext, prompt for read-only planning or rotate keys around resource restrictions.
 
 ## One entry
 

@@ -2,12 +2,21 @@ import argparse
 from dataclasses import asdict
 import json
 from pathlib import Path
+import sys
 import jd_material_agent as agent
 import manual_resume
 import direct_resume
 
+class MaintenanceParser(argparse.ArgumentParser):
+
+    def parse_args(self, args=None, namespace=None):
+        result = super().parse_args(args, namespace)
+        if hasattr(result, 'image_concurrency') and result.image_concurrency is None:
+            result.image_concurrency = {'gemini-flash': 1, 'gemini-pro': 2}.get(getattr(result, 'image_routing', 'legacy'), 4)
+        return result
+
 def build_parser():
-    parser = argparse.ArgumentParser(description='Independent self-operated material maintenance')
+    parser = MaintenanceParser(description='Independent self-operated material maintenance')
     sub = parser.add_subparsers(dest='command', required=True)
     sub.add_parser('provider-info')
     quarantine = sub.add_parser('quarantine-upload')
@@ -52,7 +61,7 @@ def build_parser():
     run.add_argument('--defer-incomplete', action='store_true', default=True)
     run.add_argument('--category-id', type=int, default=0)
     run.add_argument('--spu-concurrency', type=int, default=5)
-    run.add_argument('--image-concurrency', type=int, default=4)
+    run.add_argument('--image-concurrency', type=int)
     run.add_argument('--timeout', type=float, default=600)
     direct_run = sub.add_parser('run-direct', parents=[run], add_help=False)
     direct_run.set_defaults(command='run-direct')
@@ -67,6 +76,8 @@ def build_parser():
     direct_run.add_argument('--current-visible-skus', action='store_true')
     direct_run.add_argument('--dual-key-images', action='store_true')
     direct_run.add_argument('--no-generation-retries', action='store_true', default=True)
+    direct_run.add_argument('--image-routing', choices=('legacy', 'gemini-flash', 'gemini-pro'), default='legacy')
+    direct_run.add_argument('--selling-image-model', choices=('gpt-image-2', 'gemini-flash', 'gemini-pro'), default='gpt-image-2')
     verify = sub.add_parser('verify-direct')
     verify.add_argument('--erp', required=True)
     verify.add_argument('--output-dir', type=Path, required=True)
@@ -88,7 +99,7 @@ def build_parser():
     first.add_argument('--batch-size', type=int, default=10)
     first.add_argument('--category-id', type=int, default=0)
     first.add_argument('--spu-concurrency', type=int, default=5)
-    first.add_argument('--image-concurrency', type=int, default=4)
+    first.add_argument('--image-concurrency', type=int)
     first.add_argument('--timeout', type=float, default=600)
     first.add_argument('--pipeline', action=argparse.BooleanOptionalAction, default=True)
     first.add_argument('--resource-cooldown', action='store_true')
@@ -98,10 +109,15 @@ def build_parser():
     first.add_argument('--include-delegated', action='store_true')
     first.add_argument('--regenerate-rejected-spu-ids', nargs='+', default=[])
     first.add_argument('--defer-readback', action='store_true')
+    first.add_argument('--dual-key-images', action='store_true')
+    first.add_argument('--image-routing', choices=('legacy', 'gemini-flash', 'gemini-pro'), default='legacy')
+    first.add_argument('--selling-image-model', choices=('gpt-image-2', 'gemini-flash', 'gemini-pro'), default='gpt-image-2')
     return parser
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    import secure_credentials
+    secure_credentials.prepare_command(sys.argv[1:] if argv is None else argv)
     if args.command == 'maintain-self-operated':
         import first_use
         result = first_use.run_auto(args)

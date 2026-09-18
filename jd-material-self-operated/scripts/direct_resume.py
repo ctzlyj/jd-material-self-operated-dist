@@ -249,6 +249,8 @@ class SharedModel:
     def __init__(self, args, output):
         self.args = args
         self.output = Path(output)
+        from gemini_routing import freeze_routing
+        self.image_routing = freeze_routing(self.output, args)
         self.client = None
         self.cancel_event = threading.Event()
         self.lock = threading.Lock()
@@ -266,7 +268,13 @@ class SharedModel:
                 if not getattr(self.args, 'no_generation_retries', False) or getattr(self.args, 'resource_cooldown', False):
                     raise ValueError('dual-key mode requires no-generation-retries, without same-request resource probes')
                 from dual_key_generation import DualKeyModelClient
-                self.client = DualKeyModelClient(os.environ.get(core.PROVIDER.api_key_env, ''), os.environ.get('JD_LLM_API_KEY_2', ''), self.output, timeout=self.args.timeout, image_concurrency=self.args.image_concurrency, paused=lambda: pause_requested(self.output))
+                client_type = DualKeyModelClient
+                options = {}
+                if self.image_routing is not None:
+                    from gemini_routing import GeminiRoutedModelClient
+                    client_type = GeminiRoutedModelClient
+                    options = {'profile': self.args.image_routing, 'selling_model': self.args.selling_image_model}
+                self.client = client_type(os.environ.get(core.PROVIDER.api_key_env, ''), os.environ.get('JD_LLM_API_KEY_2', ''), self.output, timeout=self.args.timeout, image_concurrency=self.args.image_concurrency, paused=lambda: pause_requested(self.output), **options)
             else:
                 self.client = core.ModelClient(os.environ.get(core.PROVIDER.api_key_env, ''), timeout=self.args.timeout, image_concurrency=self.args.image_concurrency)
             self.client.no_generation_retries = bool(getattr(self.args, 'no_generation_retries', False))

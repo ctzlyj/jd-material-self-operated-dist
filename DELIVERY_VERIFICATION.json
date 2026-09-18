@@ -1,55 +1,56 @@
 {
-  "status": "deployed-with-local-positive-and-live-denial-verification",
-  "clientVersion": "2026.09.16.9",
-  "coreVersion": "2026.09.16.9",
-  "sourceCommit": "e005fabe06eea7f46aeb4c8d2f65d146cfc94359",
-  "protectedClientTests": 427,
-  "cleanInstallTests": 427,
-  "localCoreCallsInSuite": 219,
-  "serviceBrowserTests": 751,
+  "status": "deployed-and-verified-protected-release",
+  "clientVersion": "2026.09.17.1",
+  "coreVersion": "2026.09.17.1",
+  "sourceCommit": "55e0d32c0ba3f5416e01203de1ffa5460ad5d1c6",
+  "sourceAndCleanTestsEach": 469,
+  "protectedTests": 469,
+  "protectedCleanTests": 469,
+  "localCoreCallsInProtectedSuite": 223,
   "rootTests": 79,
-  "transportTests": 15,
-  "offlineIdentityTests": 3,
-  "localHttpSyntheticCompatibility": {
-    "newSelfFunctions": 8,
-    "legacySelfFunctions": 8,
-    "popFunctions": 6,
-    "spusPerClient": [
-      1,
-      10
-    ],
-    "fullSkusPerClient": [
-      2,
-      20
-    ],
-    "idempotentReadback": true
+  "serviceBrowserTests": 751,
+  "browserTransportTests": 15,
+  "publicVerification": "passed-before-publication",
+  "originalV9Upgrade": "passed",
+  "localStateAndConflictsPreserved": true,
+  "privateInstallOverwriteRefused": true,
+  "serviceDeployment": "dep_mvf2f",
+  "serviceSourceDigest": "sha256:d237eaf9bde07d9c41332e68adc7e9576a6a7dd8297d86437f35ce386d038286",
+  "legacySelfV9AndPopCoresUnchanged": true,
+  "otherProductReleasePreserved": true,
+  "authorizationAndAccessUnchanged": true,
+  "temporaryGrants": 0,
+  "localHttpFunctions": {
+    "selfNew": 8,
+    "selfV9": 8,
+    "selfLegacy": 8,
+    "pop": 6
   },
-  "legacySelfCore": "2026.09.14.29",
-  "popCore": "2026.09.14.1",
-  "defaultCoresByteIdentical": true,
-  "serviceDeployment": "dep_0w6s3",
-  "serviceSourceDigest": "sha256:5d122ad6691ec321fe40e6d88b87a48307b41598c74d1593df26b8f5043574d4",
-  "domainAndAccessPolicyUnchanged": true,
-  "authorizationMembershipsUnchanged": true,
-  "realIdentityDenialChecks": "passed-for-new-self-legacy-self-and-pop",
-  "liveAuthorizedPositiveCall": "not-performed-owner-not-entitled-no-temporary-grant",
-  "privateSourceDownloadDenied": true,
-  "upgradeFrom": "2026.09.15.2",
-  "cleanInstallAndNonDestructiveUpgrade": "passed",
-  "localConflictAndPrivateInstallGuard": "passed",
-  "realModelCalls": 0,
-  "realProductWrites": 0,
-  "historicalMaintenanceResumed": false,
-  "colleagueProductionMaintenance": "not-performed",
-  "scoreRefresh": "not-queried",
-  "verificationEvidenceSha256": {
-    "service-local-verification.json": "d3dc8b8f6fbadf1fedee6a8ee72c04988a58065da3e3599c8b2abba4f8cdff5a",
-    "startup-smoke.json": "4d5b0dcd389c86537fc1d1d41c52f1fd43377bfa8b489323c8c40dab4223b15c",
-    "upgrade-verification.json": "83690b8aeceff40839c03f8a3d12daad1ca094ecc867495506338d790af201bb",
-    "live-before.json": "0fc599ec3fa011fb583da690b1b35e62104e16ebd0b6483abfb003e84e699166",
-    "live-after.json": "14736c447a6b9f76d349239636b501c7502fba3e6a00e931a8066943d5679bca",
-    "project-after.json": "70ae79640e639a3541807139f27aac4f6e6bbf3d699e4f83c9b12b206aa4314b",
-    "production-before-publish.json": "dd6c605f39f54715fc90ec9bdb089230385dbdcd93773f7492202542a3e6f823",
-    "clean-installed-tests.json": "cb6ced0e39156913fe5ad7f2a0c876914f8d6175a44f726f1c09e57c6d7b082f"
-  }
+  "liveChecks": [
+    {
+      "client": "new-self",
+      "ok": false,
+      "code": "ERP_NOT_ALLOWED"
+    },
+    {
+      "client": "v9-self",
+      "ok": false,
+      "code": "ERP_NOT_ALLOWED"
+    },
+    {
+      "client": "legacy-self",
+      "ok": false,
+      "code": "ERP_NOT_ALLOWED"
+    },
+    {
+      "client": "legacy-pop",
+      "ok": false,
+      "code": "ERP_NOT_ALLOWED"
+    }
+  ],
+  "privateSourceNotDownloadable": true,
+  "coworkerDeviceAcceptance": "not-performed",
+  "maximumStableConcurrencyProven": false,
+  "productionSpeedProven": false,
+  "credentialRevision": "2026.09.17.1"
 }

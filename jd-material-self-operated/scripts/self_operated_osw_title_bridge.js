@@ -1,11 +1,16 @@
 (async () => {
   const action = __JD_OSW_TITLE_ACTION__;
-  const base = 'https://storage.360buyimg.com/pubfree-bucket/commodity-backend-fe/prod/d6069ca/assets/';
-  if (!Array.from(document.scripts).some(script => script.src === base + 'index.4c6d2437.js')) {
+  const prefix = 'https://storage.360buyimg.com/pubfree-bucket/commodity-backend-fe/prod/';
+  const versions = [
+    {base: prefix + 'd6069ca/assets/', main: 'index.4c6d2437.js', batch: 'batch.016fe8c9.js'},
+    {base: prefix + 'e5e2d19/assets/', main: 'index.e44ce2eb.js', batch: 'batch.f9863095.js'},
+  ].filter(version => Array.from(document.scripts).some(script => script.src === version.base + version.main));
+  if (versions.length !== 1) {
     throw Error('OSW task frontend version changed; verify contract before writes');
   }
-  const main = await import(base + 'index.4c6d2437.js');
-  const api = await import(base + 'batch.016fe8c9.js');
+  const version = versions[0];
+  const main = await import(version.base + version.main);
+  const api = await import(version.base + version.batch);
   if (!action.erp || main.d() !== action.erp) throw Error('authenticated ERP mismatch');
   const lookup = async () => {
     const reply = await api.m({page: 1, rows: 5, type: 272, name: action.name}, true);

@@ -24,7 +24,7 @@ import httpx
 from openpyxl import Workbook, load_workbook
 from PIL import Image, ImageOps
 VARIANT_ID = 'internal-self-operated'
-SKILL_VERSION = '2026.09.16.9'
+SKILL_VERSION = '2026.09.17.1'
 MAX_SPUS_PER_BATCH = 199
 MAX_SPU_CONCURRENCY = 50
 JDO_IMAGE_BASE = 'https://img14.360buyimg.com/imgzone/'
@@ -1235,6 +1235,9 @@ class ImageModelResourceBlocked(RuntimeError):
         self.evidence = evidence
         super().__init__('image model resource temporarily blocked by provider content policy; stop image requests and contact the provider; do not rotate keys to bypass')
 
+def is_image_request_url(url):
+    return urlparse(url).path.endswith(('/images/edits', '/images/gemini_flash/generations'))
+
 def _model_resource_failure_evidence(response, api_key):
     sensitive = {'authorization', 'cookie', 'setcookie', 'apikey', 'token', 'accesstoken', 'refreshtoken', 'idtoken', 'secret', 'clientsecret', 'password', 'b64json', 'base64', 'image', 'images', 'imagedata'}
 
@@ -1257,7 +1260,12 @@ def _model_resource_failure_evidence(response, api_key):
         clean = re.sub('(?i)\\bBearer\\s+[^\\s"\',;]+', 'Bearer [REDACTED]', clean)
         return re.sub('(?i)\\b(api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|secret)\\s*[=:]\\s*[^\\r\\n,;}]+', '\\1=[REDACTED]', clean)
     try:
-        body = response.json()
+        request = getattr(response, '_request', None)
+        if request is not None and urlparse(str(request.url)).path.endswith('/images/gemini_flash/generations'):
+            from gemini_image_protocol import response_summary
+            body = response_summary(response)
+        else:
+            body = response.json()
     except ValueError:
         body = response.text
     allowed = {'request-id', 'x-request-id', 'x-ms-request-id', 'apim-request-id', 'x-trace-id', 'traceparent', 'x-correlation-id', 'date', 'retry-after'}
@@ -1288,7 +1296,7 @@ class ModelClient:
         last_error = None
         if getattr(self, 'no_generation_retries', False):
             max_attempts = 1
-        image_request = urlparse(url).path.endswith('/images/edits')
+        image_request = is_image_request_url(url)
         recovery = getattr(self, 'image_resource_recovery', None) if image_request else None
         if recovery is not None:
             cached = recovery.before_request(method, url, kwargs)
@@ -1314,6 +1322,8 @@ class ModelClient:
                     raise ImageModelResourceBlocked(self.image_resource_failure)
                 if self.authentication_failed:
                     raise RuntimeError('model authentication failed; further dispatch stopped')
+                if image_request and callable(getattr(self, 'before_image_dispatch', None)):
+                    self.before_image_dispatch(method, url, kwargs)
                 response = self.http.request(method, url, **kwargs)
                 if image_request and callable(getattr(self, 'observe_image_response', None)):
                     self.observe_image_response(response)
@@ -1341,8 +1351,11 @@ class ModelClient:
                     if isinstance(details, dict) and str(details.get('code')) == '2007':
                         self.quota_exhausted = True
                         raise ModelQuotaExceeded()
-                error = RuntimeError(f'HTTP {response.status_code}: {response.text[:2000]}')
-                if getattr(self, 'skip_failed_images', False) and response.status_code == 400 and urlparse(url).path.endswith('/images/edits') and is_moderation_error(error):
+                error_body = response.text[:2000]
+                if urlparse(url).path.endswith('/images/gemini_flash/generations'):
+                    error_body = json.dumps(_model_resource_failure_evidence(response, self._api_key), ensure_ascii=False)
+                error = RuntimeError(f'HTTP {response.status_code}: {error_body}')
+                if getattr(self, 'skip_failed_images', False) and response.status_code == 400 and image_request and is_moderation_error(error):
                     raise error
                 retryable_gateway_error = response.status_code == 400 and ('BAD_UPSTREAM' in response.text.upper() or 'FAILED_RESPONSE' in response.text.upper() or bool(re.search('\\\\?"code\\\\?"\\s*:\\s*(?:500|502|503|504)', response.text, re.IGNORECASE)))
                 if response.status_code not in {408, 409, 425, 429} and response.status_code < 500 and (not retryable_gateway_error):
@@ -1585,7 +1598,8 @@ def _request_image_set(client: ModelClient, kinds: Iterable[str], source: Path, 
     if not kinds:
         return (results, errors)
     with ThreadPoolExecutor(max_workers=min(len(kinds), PROVIDER.maximum_image_concurrency)) as image_pool:
-        futures = {image_pool.submit(client.edit_image, image_prompt(kind, title), source): kind for kind in kinds}
+        routed = getattr(client, 'edit_material', None)
+        futures = {image_pool.submit(routed, kind, image_prompt(kind, title), source) if callable(routed) else image_pool.submit(client.edit_image, image_prompt(kind, title), source): kind for kind in kinds}
         for future in as_completed(futures):
             kind = futures[future]
             try:
