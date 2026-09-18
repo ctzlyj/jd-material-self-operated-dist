@@ -1,0 +1,10 @@
+{
+  "protocol": 1,
+  "product": "jd-material-self-operated",
+  "repository": "ctzlyj/jd-material-self-operated-dist",
+  "compatibleFrom": [
+    "2026.09.17.1",
+    "2026.09.18.1"
+  ],
+  "stateMigration": false
+}

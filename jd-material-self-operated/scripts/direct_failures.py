@@ -14,7 +14,7 @@ def job_failure_reasons(job, *, upload_failures, preflight_failures, title_audit
 def check_unknown_writes(batch, *, uploads_only=False):
     import upload_quarantine
     quarantined = upload_quarantine.for_batch(batch)
-    held_names = {item['fileName'] for item in quarantined.values()}
+    held_names = {name for item in quarantined.values() for name in item['fileNames']}
     folder = Path(batch) / '.state'
     ledger = folder / 'upload-ledger.json'
     if ledger.exists():

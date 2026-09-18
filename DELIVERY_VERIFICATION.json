@@ -1,56 +1,38 @@
 {
-  "status": "deployed-and-verified-protected-release",
-  "clientVersion": "2026.09.17.1",
+  "status": "verified-compatible-client-release",
+  "clientVersion": "2026.09.18.2",
   "coreVersion": "2026.09.17.1",
-  "sourceCommit": "55e0d32c0ba3f5416e01203de1ffa5460ad5d1c6",
-  "sourceAndCleanTestsEach": 469,
-  "protectedTests": 469,
-  "protectedCleanTests": 469,
+  "sourceCommit": "7c3a35fe195851b961c1db160aff9037c33f0767",
+  "sourceAndCleanTestsEach": 514,
+  "protectedCleanTests": 514,
   "localCoreCallsInProtectedSuite": 223,
   "rootTests": 79,
   "serviceBrowserTests": 751,
   "browserTransportTests": 15,
-  "publicVerification": "passed-before-publication",
-  "originalV9Upgrade": "passed",
+  "updateRegressionTests": 31,
+  "verifiedUpgradeFrom": [
+    "2026.09.17.1",
+    "2026.09.18.1"
+  ],
   "localStateAndConflictsPreserved": true,
   "privateInstallOverwriteRefused": true,
-  "serviceDeployment": "dep_mvf2f",
-  "serviceSourceDigest": "sha256:d237eaf9bde07d9c41332e68adc7e9576a6a7dd8297d86437f35ce386d038286",
-  "legacySelfV9AndPopCoresUnchanged": true,
-  "otherProductReleasePreserved": true,
-  "authorizationAndAccessUnchanged": true,
+  "serviceDeploymentRequired": false,
+  "serviceDeployedThisRelease": false,
+  "authorizationAndCoreContractUnchanged": true,
   "temporaryGrants": 0,
-  "localHttpFunctions": {
-    "selfNew": 8,
-    "selfV9": 8,
-    "selfLegacy": 8,
-    "pop": 6
-  },
-  "liveChecks": [
-    {
-      "client": "new-self",
-      "ok": false,
-      "code": "ERP_NOT_ALLOWED"
-    },
-    {
-      "client": "v9-self",
-      "ok": false,
-      "code": "ERP_NOT_ALLOWED"
-    },
-    {
-      "client": "legacy-self",
-      "ok": false,
-      "code": "ERP_NOT_ALLOWED"
-    },
-    {
-      "client": "legacy-pop",
-      "ok": false,
-      "code": "ERP_NOT_ALLOWED"
-    }
-  ],
-  "privateSourceNotDownloadable": true,
   "coworkerDeviceAcceptance": "not-performed",
+  "productionResumed": false,
   "maximumStableConcurrencyProven": false,
   "productionSpeedProven": false,
-  "credentialRevision": "2026.09.17.1"
+  "credentialRevision": "2026.09.17.1",
+  "autoUpdate": {
+    "protocol": 1,
+    "repository": "ctzlyj/jd-material-self-operated-dist",
+    "intervalSeconds": 21600,
+    "oldClientsNeedOneTimeBootstrap": true,
+    "requiresSuccessfulStableReleaseCI": true,
+    "inFlightHotSwap": false,
+    "localModificationsOverwritten": false,
+    "stateMigration": false
+  }
 }

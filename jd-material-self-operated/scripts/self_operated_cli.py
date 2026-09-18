@@ -3,6 +3,9 @@ from dataclasses import asdict
 import json
 from pathlib import Path
 import sys
+if __name__ == '__main__':
+    import auto_update
+    auto_update.bootstrap(Path(__file__), sys.argv[1:])
 import jd_material_agent as agent
 import manual_resume
 import direct_resume

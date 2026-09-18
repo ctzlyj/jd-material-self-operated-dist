@@ -24,7 +24,7 @@ import httpx
 from openpyxl import Workbook, load_workbook
 from PIL import Image, ImageOps
 VARIANT_ID = 'internal-self-operated'
-SKILL_VERSION = '2026.09.17.1'
+SKILL_VERSION = '2026.09.18.2'
 MAX_SPUS_PER_BATCH = 199
 MAX_SPU_CONCURRENCY = 50
 JDO_IMAGE_BASE = 'https://img14.360buyimg.com/imgzone/'

@@ -1,8 +1,20 @@
 {
   "product": "jd-material-self-operated",
-  "version": "2026.09.17.1",
+  "version": "2026.09.18.2",
   "coreVersion": "2026.09.17.1",
-  "coreCompatibility": null,
+  "coreCompatibility": {
+    "method": "complete-module-ast-except-version-v1",
+    "modules": {
+      "direct_binding.py": {
+        "sha256": "dfe2936e568d2df20cddec0e631eed2acfb98a44587e9d2631db2119069cb2cf",
+        "clientSha256": "dfe2936e568d2df20cddec0e631eed2acfb98a44587e9d2631db2119069cb2cf"
+      },
+      "jd_material_agent.py": {
+        "sha256": "e619f0f054ea63ec35555c9031708736cef023ebaa021370db1b9ebba4769cb3",
+        "clientSha256": "1d62bda9c4f6c5f77eb4fb82185b93c45f8b8dcecff520135d6cb0c71001c47c"
+      }
+    }
+  },
   "versionedCore": true,
   "containsOriginalCore": false,
   "remoteFunctions": [
@@ -17,11 +29,13 @@
   ],
   "files": {
     "requirements.txt": "52cf285b0466bed725247480bb7e91d5e3a00cdaa416a5ad5f737b94ea84f136",
-    "SKILL.md": "46125bc9ea76ff5c0eb3862a17d59cf2288268497ec7e27780c326ca504d32a0",
-    "VERSION": "3175d59bc716d7cc7c889b7a331daf6b1fe0ef907c961e7b7c8b72ad51f82863",
+    "SKILL.md": "8b604f38c6f1e500b6a3c40374bcd65afdaf0d9fffc1b11b470722d03e30e5d8",
+    "VERSION": "ad7cb40ef611aeb55822957df0ba9904f801b9ddec49bb670d27a345ea23363a",
     "assets/商品导入短标题模板.xlsx": "0a94a5362d949573eeb87624c3490ac0f248aa78317d5b05cf45a526b1fa7955",
     "assets/商品素材导入模板-通用场景.xlsx": "27016aebddd683d66b023b0b70ed60d9af3724678ab6aeff11754317d435ef91",
     "assets/批量维护短标题.xlsx": "7a29b8ac5a69e8cfb334ab9cda2e03f0c0b9cb9012d505a361d6514f8149909e",
+    "references/auto-update.md": "f6bf981d082333267637d9bcdfb898b8c07ec05a2ef5d577c4daf113ba4891d0",
+    "references/autonomous-recovery.md": "411c2b8eff4b0b3e54e854d9b3366f37ae5b6b0fedff506841acb1ffe29fab0a",
     "references/browser-session-lifecycle.md": "ddb3455712d2812b37d151a24a5fba0c1ead3cb3bc551ea32cd0ae2deaa43e4a",
     "references/current-visible-skus.md": "7b9c76b8de2b6f5d3c0047283d8891c2b4180d2cb0128ad3d36f0b9c0adad18c",
     "references/direct-maintenance.md": "50d6864dde18c3fc6c928b8c131217b01f76cfb4f52bcbb26ff3d5dc7d3e93ca",
@@ -37,9 +51,10 @@
     "references/rejected-materials.md": "c8fa539eb895236da3816e986a40126dd35bc74e1a6fbbd502669376f57b6039",
     "references/resume.md": "9faaf3ec10d7fb0b8045d93a7917d6ab48e3b5f2ef0bd3e11044ca41e8514bc6",
     "references/secure-credentials.md": "cf6e72dc6e175c5ca3a6dd95acf87ed18d642861166d0bb567ed3f7f11b3d8a2",
-    "references/upload-quarantine.md": "0d291b6ac466b556e9744fe532c01fc3df875a8a6f366e73ad84f37ef30595f0",
+    "references/upload-quarantine.md": "d3ac0af12c6437809273c805139faa06ee0a5a69ea9d6a3e97d9fa245807eba3",
+    "scripts/auto_update.py": "e160ac6f31f1e58b1552b9fb6a747f2636b9a4c8a78d8c32cab555a52b06113d",
     "scripts/direct_binding.py": "a5546019bcf52adb581594e2ea56545e799963358bbf9359736fcf156ab6ca97",
-    "scripts/direct_failures.py": "d56b17e5a65ee47336a0d8e17e258285e4f1b181b353861747450b14c003245b",
+    "scripts/direct_failures.py": "20aa0819832e2f86e160e205aa452c8af90c040b1697a6d66e3c12c9aa6d5803",
     "scripts/direct_pipeline.py": "8376d9ee29371c04ed511134a851953c22993d5beabe290933e68180cf3b173f",
     "scripts/direct_reconcile.py": "d404f423f171870b589f0f642ea59d4bfc8f364ad990d54d55d0d6bbb774a017",
     "scripts/direct_resume.py": "2e4ea1f2105d69236f0583b900f4138b291c7c7608572685db261bd9134de27c",
@@ -53,7 +68,7 @@
     "scripts/image_benchmark_metrics.py": "a7f465d932f2fa620039abeed9f5ffdc4aeeeb5c4057834d2786d6c34fe6c50d",
     "scripts/image_resource_recovery.py": "3840257f322e6d166058aa9539e53737c4958b720d435a54592fd95b4d3d70b3",
     "scripts/image_space_http.py": "28179d841c66f305e87071f04faca4244def5db1ea245ace0b998051e9592cb8",
-    "scripts/jd_material_agent.py": "3b1b4a98246db8f3b5d711df5cfeb4b779227ca734950593c0f7ee22bf4c3c08",
+    "scripts/jd_material_agent.py": "5b01c3cb77939087fdc186e1ed6bd437afb37ec48aecc012bc01997de89318e8",
     "scripts/manual_import_export.py": "caa18de81bbd2b10eefcf2c9f971931683c41430c69576afab1933eeb071005e",
     "scripts/manual_resume.py": "559b1f0703698fb6aeebb358395a79f2d2f44eedfb026374648420ab691d7014",
     "scripts/osw_title_tasks.py": "c6c22a79dcaa228d7aa00981fc0b17c9f9595a1cf729771b6ef28e760f2726fa",
@@ -61,7 +76,7 @@
     "scripts/secure_credentials.py": "48b34704234a1e41d65dfd1502120d533927b64bbb34a45b2572103c8cd95ead",
     "scripts/secure_launcher.py": "303c5f353705914ebfab0c6014785ae2bd4f5af2537b5609cbe94cb0915c2871",
     "scripts/self_operated_browser_bridge.js": "51841570a79d4d38d8ab0f2fde2b3aa7bb2d6457a8dbe274bd4bd547438a61e8",
-    "scripts/self_operated_cli.py": "600b240dd5ebb6038a7c1cfd81180b931b174b6fe299beb4195106f43875265f",
+    "scripts/self_operated_cli.py": "527efc3cd8853c20d6f219cb9287da3086cb4f9431bdaf03d336f5d672a1bda9",
     "scripts/self_operated_direct_product_bridge.js": "2de04fec3e18e0b076d5e46de0bf123d28aa53f4d9b21cff7082f8de03a7acf6",
     "scripts/self_operated_image_batch_upload_bridge.js": "869585cc8e2a4091301ff898f988a32700b82e6f83e82246b3d5780e2edbacce",
     "scripts/self_operated_image_lookup_batch_bridge.js": "e241a29e618aecb9fc3b19234269fa26a16c6b8e7eac76fb8854a9e8436f48b2",
@@ -70,13 +85,15 @@
     "scripts/self_operated_material_binding_bridge.js": "42bc31288632a8828a258d876875a2a9e611dc8ed4f7cd09c2f9553da08b2473",
     "scripts/self_operated_osw_title_bridge.js": "1aada61639e08a7cd78e5cf460c644207f1a7465cb02ca864347d8d0ee624468",
     "scripts/self_operated_product_bridge.js": "e1ae195eb9f947aeddab3ca3bece59438f7ad4f14343006a4891ef2cd3800bf7",
-    "scripts/upload_quarantine.py": "8188cb5aa80fe4f51f3be07fce266df40a4d2a42fc736d9dfc807f13adbe307a",
+    "scripts/upload_quarantine.py": "58912c656dc29f7476dcfa9aa8a3d0ff6c5f9c1196a00f5fd77ccf80a012447c",
     "scripts/protected_core.py": "4204c8e9ea96487a9f4e0771c5ac3bdf0981bb10a50e58b9ac78b028276793fc",
     "scripts/core_contract.py": "ba4f9bcb94e3a34d79c43016bd0dc4753d9d16374d7e371915d8a0d685973f17",
     "scripts/identity-request.mjs": "8222c7ee5e0a6368f327004d2558be9966ba760e0414418c75fd5fc9ccb9facf",
     "scripts/identity.mjs": "28b052946aa0685463cb57c62a67863ab088979a173e2656f34e4e5d793ee862",
     "scripts/protected-settings.json": "bebaab04af10bf09b739a278393c4d685ee02c68cae0c55e33ae1b2f53bf39d4",
-    "references/protected-service.md": "a1eb25ebbc90a8f222c331515031b933f62fa4a037c731bc65b9678f63d99bd7"
+    "references/protected-service.md": "a1eb25ebbc90a8f222c331515031b933f62fa4a037c731bc65b9678f63d99bd7",
+    "AUTO_UPDATE.json": "763aad6622a8c1ae90e5e6626ff389522ca78809bc2c5fbdf161f2c5d8f086be"
   },
-  "status": "deployed-with-local-positive-and-live-denial-verification"
+  "status": "verified-compatible-client-release",
+  "sourceCommit": "7c3a35fe195851b961c1db160aff9037c33f0767"
 }
